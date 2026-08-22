@@ -1,613 +1,127 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>首页</title>
+<title>5G Dashboard - Embedded</title>
 <style>
-/* 强制样式隔离 */
 #modern-5g-dashboard {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
     background-color: transparent !important;
-    color: #333333 !important;
+    color: #333 !important;
     line-height: 1.5 !important;
     box-sizing: border-box !important;
     width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
 }
+#modern-5g-dashboard * { font-family: inherit !important; box-sizing: border-box !important; }
+#modern-5g-dashboard ul, #modern-5g-dashboard li { list-style: none !important; margin: 0 !important; padding: 0 !important; }
+
+.page-header-5g { max-width: 1400px; margin: 0 auto 24px; display: flex; justify-content: space-between; align-items: center; padding: 0 24px; }
+.page-title-5g { font-size: 18px; font-weight: 600; color: #262626; }
+.page-datetime-5g { font-size: 14px; color: #888; }
+.dashboard-5g { max-width: 1400px; margin: 0 auto; display: flex; gap: 24px; align-items: stretch; padding: 0 24px; }
+.left-col-5g { width: 45%; display: flex; flex-direction: column; gap: 24px; }
+.right-col-5g { width: 55%; display: flex; flex-direction: column; }
+.right-col-5g .card-5g { flex: 1; }
+.card-5g { background: #FFF; border-radius: 20px; box-shadow: 0 8px 24px rgba(149,157,165,0.1); position: relative; overflow: hidden; }
+.card-hd-5g { padding: 24px 24px 16px; display: flex; justify-content: space-between; align-items: center; position: relative; z-index: 1; }
+.card-bd-5g { padding: 0 24px 24px; position: relative; z-index: 1; }
+.card-tt-5g { font-size: 16px; font-weight: 600; color: #262626; }
+.card-st-5g { position: relative; overflow: hidden; }
+.card-st-5g::after { content: ''; position: absolute; bottom: -4px; left: 8px; right: 8px; height: 16px; background: #EBF3FF; border-radius: 0 0 20px 20px; z-index: 0; }
+.wave-ct-5g { position: absolute; bottom: 0; left: 0; right: 0; height: 100%; overflow: hidden; z-index: 0; pointer-events: none; }
+.wave-5g { position: absolute; bottom: var(--wh, -10%); left: -200px; width: 800px; height: 800px; border-radius: 43%; animation: spin-5g var(--ws, 10s) linear infinite; }
+.w1-5g { background: rgba(64,150,255,0.05); }
+.w2-5g { background: rgba(64,150,255,0.08); animation-duration: calc(var(--ws, 10s) * 1.3); animation-direction: reverse; }
+@keyframes spin-5g { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.st-dot-5g { width: 8px; height: 8px; border-radius: 50%; background: #52C41A; display: inline-block; transition: background 0.3s; }
+.st-txt-5g { font-size: 12px; color: #888; margin-left: 8px; }
+.nt-5g { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+.nt-t-5g { font-size: 16px; font-weight: 600; color: #333; }
+.sp-sec-5g { display: flex; justify-content: space-around; align-items: center; padding: 12px 0; }
+.sp-item-5g { display: flex; align-items: center; gap: 10px; }
+.sp-ico-5g { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #F7F8FA; color: #666; }
+.sp-div-5g { width: 1px; height: 40px; background: #F0F2F5; }
+.sp-info-5g { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.sp-lbl-5g { font-size: 12px; color: #999; }
+.sp-val-5g { display: flex; align-items: baseline; gap: 1px; }
+.sp-num-5g { font-family: DIN, Roboto, 'JetBrains Mono', monospace; font-size: 40px; font-weight: 700; color: #000; line-height: 1; min-width: 3ch; text-align: right; }
+.sp-dec-5g { font-family: DIN, Roboto, 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; color: #000; }
+.sp-unit-5g { font-size: 12px; color: #999; margin-left: 2px; }
+.info-list-5g { display: flex; flex-direction: column; width: 100%; }
+.info-row-5g { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid #F5F5F5; width: 100%; gap: 16px; }
+.info-row-5g:last-child { border-bottom: none; }
+.info-l-5g { display: flex; align-items: center; gap: 12px; }
+.info-ico-5g { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background-color: transparent !important; border: none !important; }
+.info-ico-5g svg { width: 14px; height: 14px; }
+.info-lbl-5g { font-size: 14px; color: #666; }
+.info-val-5g { font-family: DIN, Roboto, 'JetBrains Mono', monospace; font-size: 14px; font-weight: 500; color: #333; text-align: right; flex-shrink: 0; }
+.info-val-long-5g { font-size: 11px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signal-bars-5g { display: flex; align-items: flex-end; gap: 3px; }
+.bar-5g { width: 6px; background: #E8E8E8; border-radius: 2px; transition: background 0.3s; }
+.b1-5g { height: 8px; } .b2-5g { height: 12px; } .b3-5g { height: 16px; } .b4-5g { height: 20px; } .b5-5g { height: 24px; }
+.bar-5g.a { background: #52C41A; } .bar-5g.w { background: #FAAD14; } .bar-5g.d { background: #FF4D4F; }
+.gauge-wrap-5g { display: flex; justify-content: center; align-items: center; width: 100%; padding: 24px 0; }
+.gauge-box-5g { position: relative; width: 120px; height: 120px; }
+.gauge-svg-5g { width: 100%; height: 100%; }
+.gauge-bg-5g { fill: none; stroke: #F0F2F5; stroke-width: 8; }
+.gauge-pg-5g { fill: none; stroke: #FA8C16; stroke-width: 8; stroke-linecap: round; stroke-dasharray: 339.292; stroke-dashoffset: 339.292; transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset 0.6s ease, stroke 0.3s !important; }
+.gauge-num-5g { font-family: DIN, Roboto, 'JetBrains Mono', monospace; font-size: 42px; font-weight: 700; color: #262626; line-height: 1; }
+.gauge-lbl-5g { font-size: 12px; color: #999; margin-top: 2px; }
+.prog-title-5g { font-size: 12px; font-weight: 600; color: #999; margin-bottom: 12px; }
+.prog-bar-5g { width: 100%; height: 6px; background-color: #F0F2F5; border-radius: 6px; overflow: hidden; }
+.prog-fill-5g { height: 100%; border-radius: 6px; transition: width 0.3s ease-in-out, background-color 0.3s; }
+.band-grid-5g { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
+.band-card-5g { display: flex; align-items: center; padding: 16px; background-color: #F7F8FA; border-radius: 12px; gap: 12px; }
+.band-ico-5g { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.band-info-5g { display: flex; flex-direction: column; }
+.band-label-5g { font-size: 12px; color: #888; margin-bottom: 4px; }
+.band-value-5g { font-size: 16px; font-weight: 700; color: #333; line-height: 1; }
+.ant-grid-5g { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.ant-card-5g { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 72px; background-color: #F7F8FA; border-radius: 12px; }
+.ant-label-5g { font-size: 12px; color: #999; margin-bottom: 4px; }
+.ant-value-5g { font-size: 16px; font-weight: 700; color: #333; }
 
-#modern-5g-dashboard * {
-    font-family: inherit !important;
-    box-sizing: border-box !important;
-}
-
-#modern-5g-dashboard ul, 
-#modern-5g-dashboard li {
-    list-style: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-/* 5G看板样式 */
-.page-header-5g {
-    max-width: 1400px;
-    margin: 0 auto 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 24px;
-}
-
-.page-title-5g {
-    font-size: 18px;
-    font-weight: 600;
-    color: #262626;
-}
-
-.page-datetime-5g {
-    font-size: 14px;
-    color: #888;
-}
-
-.dashboard-5g {
-    max-width: 1400px;
-    margin: 0 auto;
-    display: flex;
-    gap: 24px;
-    align-items: stretch;
-    padding: 0 24px;
-}
-
-.left-col-5g {
-    width: 45%;
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-}
-
-.right-col-5g {
-    width: 55%;
-    display: flex;
-    flex-direction: column;
-}
-
-.right-col-5g .card-5g {
-    flex: 1;
-}
-
-.card-5g {
-    background: #FFFFFF;
-    border-radius: 20px;
-    box-shadow: 0 8px 24px rgba(149, 157, 165, 0.1);
-    position: relative;
-    overflow: hidden;
-}
-
-.card-hd-5g {
-    padding: 24px 24px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: relative;
-    z-index: 1;
-}
-
-.card-bd-5g {
-    padding: 0 24px 24px;
-    position: relative;
-    z-index: 1;
-}
-
-.card-tt-5g {
-    font-size: 16px;
-    font-weight: 600;
-    color: #262626;
-}
-
-/* 状态卡片 */
-.card-st-5g {
-    position: relative;
-    overflow: hidden;
-}
-
-.card-st-5g::after {
-    content: '';
-    position: absolute;
-    bottom: -4px;
-    left: 8px;
-    right: 8px;
-    height: 16px;
-    background: #EBF3FF;
-    border-radius: 0 0 20px 20px;
-    z-index: 0;
-}
-
-.wave-ct-5g {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 100%;
-    overflow: hidden;
-    z-index: 0;
-    pointer-events: none;
-}
-
-.wave-5g {
-    position: absolute;
-    bottom: var(--wh, -10%);
-    left: -200px;
-    width: 800px;
-    height: 800px;
-    border-radius: 43%;
-    animation: spin-5g var(--ws, 10s) linear infinite;
-}
-
-.w1-5g {
-    background: rgba(64, 150, 255, 0.05);
-}
-
-.w2-5g {
-    background: rgba(64, 150, 255, 0.08);
-    animation-duration: calc(var(--ws, 10s) * 1.3);
-    animation-direction: reverse;
-}
-
-@keyframes spin-5g {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-.st-dot-5g {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #52C41A;
-    display: inline-block;
-    transition: background 0.3s;
-}
-
-.st-txt-5g {
-    font-size: 12px;
-    color: #888;
-    margin-left: 8px;
-}
-
-.nt-5g {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 20px;
-}
-
-.nt-t-5g {
-    font-size: 16px;
-    font-weight: 600;
-    color: #333;
-}
-
-.sp-sec-5g {
-    display: flex;
-    justify-content: space-around;
-    align-items: center;
-    padding: 12px 0;
-}
-
-.sp-item-5g {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.sp-ico-5g {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #F7F8FA;
-    color: #666;
-}
-
-.sp-div-5g {
-    width: 1px;
-    height: 40px;
-    background: #F0F2F5;
-}
-
-.sp-info-5g {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-}
-
-.sp-lbl-5g {
-    font-size: 12px;
-    color: #999;
-}
-
-.sp-val-5g {
-    display: flex;
-    align-items: baseline;
-    gap: 1px;
-}
-
-.sp-num-5g {
-    font-family: DIN, Roboto, 'JetBrains Mono', monospace;
-    font-size: 40px;
-    font-weight: 700;
-    color: #000;
-    line-height: 1;
-    min-width: 3ch;
-    text-align: right;
-}
-
-.sp-dec-5g {
-    font-family: DIN, Roboto, 'JetBrains Mono', monospace;
-    font-size: 24px;
-    font-weight: 700;
-    color: #000;
-}
-
-.sp-unit-5g {
-    font-size: 12px;
-    color: #999;
-    margin-left: 2px;
-}
-
-/* 网络信息列表 */
-.info-list-5g {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-}
-
-.info-row-5g {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 0;
-    border-bottom: 1px solid #F5F5F5;
-    width: 100%;
-    gap: 16px;
-}
-
-.info-row-5g:last-child {
-    border-bottom: none;
-}
-
-.info-l-5g {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.info-ico-5g {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    background-color: transparent !important;
-    border: none !important;
-}
-
-.info-ico-5g svg {
-    width: 14px;
-    height: 14px;
-}
-
-.info-lbl-5g {
-    font-size: 14px;
-    color: #666;
-}
-
-.info-val-5g {
-    font-family: DIN, Roboto, 'JetBrains Mono', monospace;
-    font-size: 14px;
-    font-weight: 500;
-    color: #333;
-    text-align: right;
-    flex-shrink: 0;
-}
-
-.info-val-long-5g {
-    font-size: 11px;
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* 信号强度 */
-.signal-bars-5g {
-    display: flex;
-    align-items: flex-end;
-    gap: 3px;
-}
-
-.bar-5g {
-    width: 6px;
-    background: #E8E8E8;
-    border-radius: 2px;
-    transition: background 0.3s;
-}
-
-.b1-5g { height: 8px; }
-.b2-5g { height: 12px; }
-.b3-5g { height: 16px; }
-.b4-5g { height: 20px; }
-.b5-5g { height: 24px; }
-
-.bar-5g.a { background: #52C41A; }
-.bar-5g.w { background: #FAAD14; }
-.bar-5g.d { background: #FF4D4F; }
-
-.gauge-wrap-5g {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 100%;
-    padding: 24px 0;
-}
-
-.gauge-box-5g {
-    position: relative;
-    width: 120px;
-    height: 120px;
-}
-
-.gauge-svg-5g {
-    width: 100%;
-    height: 100%;
-}
-
-.gauge-bg-5g {
-    fill: none;
-    stroke: #F0F2F5;
-    stroke-width: 8;
-}
-
-.gauge-pg-5g {
-    fill: none;
-    stroke: #FA8C16;
-    stroke-width: 8;
-    stroke-linecap: round;
-    stroke-dasharray: 339.292;
-    stroke-dashoffset: 339.292;
-    transform: rotate(-90deg);
-    transform-origin: center;
-    transition: stroke-dashoffset 0.6s ease, stroke 0.3s !important;
-}
-
-.gauge-num-5g {
-    font-family: DIN, Roboto, 'JetBrains Mono', monospace;
-    font-size: 42px;
-    font-weight: 700;
-    color: #262626;
-    line-height: 1;
-}
-
-.gauge-lbl-5g {
-    font-size: 12px;
-    color: #999;
-    margin-top: 2px;
-}
-
-.prog-title-5g {
-    font-size: 12px;
-    font-weight: 600;
-    color: #999;
-    margin-bottom: 12px;
-}
-
-.prog-bar-5g {
-    width: 100%;
-    height: 6px;
-    background-color: #F0F2F5;
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.prog-fill-5g {
-    height: 100%;
-    border-radius: 6px;
-    transition: width 0.3s ease-in-out, background-color 0.3s;
-}
-
-/* 频段配置 */
-.band-grid-5g {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    margin-bottom: 24px;
-}
-
-.band-card-5g {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    padding: 16px;
-    background-color: #F7F8FA;
-    border-radius: 12px;
-    gap: 12px;
-}
-
-.band-ico-5g {
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
-
-.band-info-5g {
-    display: flex;
-    flex-direction: column;
-}
-
-.band-label-5g {
-    font-size: 12px;
-    color: #888;
-    margin-bottom: 4px;
-}
-
-.band-value-5g {
-    font-size: 16px;
-    font-weight: 700;
-    color: #333;
-    line-height: 1;
-}
-
-/* 天线分集 */
-.ant-grid-5g {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-}
-
-.ant-card-5g {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 72px;
-    background-color: #F7F8FA;
-    border-radius: 12px;
-}
-
-.ant-label-5g {
-    font-size: 12px;
-    color: #999;
-    margin-bottom: 4px;
-}
-
-.ant-value-5g {
-    font-size: 16px;
-    font-weight: 700;
-    color: #333;
-}
-
-/* 响应式 */
 @media(max-width: 900px) {
-    .dashboard-5g {
-        flex-direction: column;
-    }
-    .left-col-5g, .right-col-5g {
-        width: 100% !important;
-    }
-    .right-col-5g .card-5g {
-        flex: none;
-    }
-    .sp-sec-5g {
-        flex-direction: column;
-        gap: 16px;
-    }
-    .sp-div-5g {
-        width: 80%;
-        height: 1px;
-    }
-    .sp-num-5g {
-        font-size: 36px;
-    }
+    .dashboard-5g { flex-direction: column; }
+    .left-col-5g, .right-col-5g { width: 100% !important; }
+    .right-col-5g .card-5g { flex: none; }
+    .sp-sec-5g { flex-direction: column; gap: 16px; }
+    .sp-div-5g { width: 80%; height: 1px; }
+    .sp-num-5g { font-size: 36px; }
 }
-
-/* 移动端自适应 */
 @media(max-width: 768px) {
-    body {
-        padding: 12px !important;
-        overflow-x: hidden !important;
-    }
-    .dashboard-5g {
-        flex-direction: column !important;
-        display: flex !important;
-        align-items: stretch !important;
-        gap: 16px !important;
-    }
-    .left-col-5g, .right-col-5g {
-        width: 100% !important;
-        height: auto !important;
-    }
-    .sp-num-5g {
-        font-size: 32px !important;
-    }
-    .sp-dec-5g {
-        font-size: 20px !important;
-    }
-    .gauge-box-5g {
-        width: 100px !important;
-        height: 100px !important;
-    }
-    .gauge-num-5g {
-        font-size: 32px !important;
-    }
-    .band-grid-5g {
-        grid-template-columns: 1fr !important;
-    }
-    .ant-grid-5g {
-        grid-template-columns: 1fr 1fr !important;
-    }
-    .info-row-5g {
-        padding: 10px 0 !important;
-    }
+    .sp-num-5g { font-size: 32px !important; }
+    .sp-dec-5g { font-size: 20px !important; }
+    .gauge-box-5g { width: 100px !important; height: 100px !important; }
+    .gauge-num-5g { font-size: 32px !important; }
+    .band-grid-5g { grid-template-columns: 1fr !important; }
+    .ant-grid-5g { grid-template-columns: 1fr 1fr !important; }
 }
-
-/* 深色模式 */
 @media (prefers-color-scheme: dark) {
-    #modern-5g-dashboard {
-        background-color: transparent !important;
-        color: #E5E7EB !important;
-    }
-    .card-5g {
-        background-color: #1E1E1E !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-    }
-    .band-card-5g, .ant-card-5g {
-        background-color: #2D2D2D !important;
-    }
-    .card-tt-5g, .prog-title-5g, .nt-t-5g {
-        color: #E5E7EB !important;
-    }
-    .st-txt-5g, .sp-lbl-5g, .info-lbl-5g, .band-label-5g, .ant-label-5g, .gauge-lbl-5g {
-        color: #9CA3AF !important;
-    }
-    .sp-num-5g, .sp-dec-5g, .info-val-5g, .band-value-5g, .ant-value-5g, .gauge-num-5g {
-        color: #F3F4F6 !important;
-    }
-    .prog-bar-5g {
-        background-color: #374151 !important;
-    }
-    .info-row-5g {
-        border-bottom-color: #374151 !important;
-    }
-    .wave-5g {
-        opacity: 0.5 !important;
-    }
-    .card-st-5g::after {
-        background: #2D3748 !important;
-    }
+    #modern-5g-dashboard { color: #E5E7EB !important; }
+    .card-5g { background-color: #1E1E1E !important; box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
+    .band-card-5g, .ant-card-5g { background-color: #2D2D2D !important; }
+    .card-tt-5g, .prog-title-5g, .nt-t-5g { color: #E5E7EB !important; }
+    .st-txt-5g, .sp-lbl-5g, .info-lbl-5g, .band-label-5g, .ant-label-5g, .gauge-lbl-5g { color: #9CA3AF !important; }
+    .sp-num-5g, .sp-dec-5g, .info-val-5g, .band-value-5g, .ant-value-5g, .gauge-num-5g { color: #F3F4F6 !important; }
+    .prog-bar-5g { background-color: #374151 !important; }
+    .info-row-5g { border-bottom-color: #374151 !important; }
+    .wave-5g { opacity: 0.5 !important; }
+    .card-st-5g::after { background: #2D3748 !important; }
 }
 </style>
 </head>
 <body>
-
 <div id="modern-5g-dashboard">
     <div class="page-header-5g">
         <span class="page-title-5g">运行状态</span>
         <span class="page-datetime-5g" id="current-time"></span>
     </div>
-
     <div class="dashboard-5g">
         <div class="left-col-5g">
-            <!-- 状态与速度 -->
             <div class="card-5g card-st-5g" id="card-st" style="--wh:-10%;--ws:10s">
                 <div class="wave-ct-5g"><div class="wave-5g w1-5g"></div><div class="wave-5g w2-5g"></div></div>
                 <div class="card-hd-5g">
@@ -622,7 +136,7 @@
                         <div class="sp-item-5g">
                             <div class="sp-ico-5g"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div>
                             <div class="sp-info-5g">
-                                <span class="sp-lbl-5g">下行速度</span>
+                                <span class="sp-lbl-5g">下行速率</span>
                                 <div class="sp-val-5g"><span class="sp-num-5g" id="dl-i">0</span><span class="sp-dec-5g" id="dl-d">.00</span><span class="sp-unit-5g">Mbps</span></div>
                             </div>
                         </div>
@@ -630,34 +144,29 @@
                         <div class="sp-item-5g">
                             <div class="sp-ico-5g"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div>
                             <div class="sp-info-5g">
-                                <span class="sp-lbl-5g">上行速度</span>
+                                <span class="sp-lbl-5g">上行速率</span>
                                 <div class="sp-val-5g"><span class="sp-num-5g" id="ul-i">0</span><span class="sp-dec-5g" id="ul-d">.00</span><span class="sp-unit-5g">Mbps</span></div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <!-- 网络信息 -->
             <div class="card-5g">
                 <div class="card-hd-5g"><span class="card-tt-5g">网络信息</span></div>
                 <div class="card-bd-5g">
                     <div class="info-list-5g">
                         <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(64,150,255,0.1)"><svg viewBox="0 0 24 24" fill="#4096FF"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg></span><span class="info-lbl-5g">运营商</span></div><span class="info-val-5g" id="v-op">--</span></div>
                         <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(82,196,26,0.1)"><svg viewBox="0 0 24 24" fill="#52C41A"><path d="M2 22h20V2z"/></svg></span><span class="info-lbl-5g">网络模式</span></div><span class="info-val-5g" id="v-mode">--</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(0,188,212,0.1)"><svg viewBox="0 0 24 24" fill="#00BCD4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span><span class="info-lbl-5g">下行带宽</span></div><span class="info-val-5g" id="v-dlbw">-- Mbps</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(250,140,22,0.1)"><svg viewBox="0 0 24 24" fill="#FA8C16"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span><span class="info-lbl-5g">上行带宽</span></div><span class="info-val-5g" id="v-ulbw">-- Mbps</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(114,46,209,0.1)"><svg viewBox="0 0 24 24" fill="#722ED1"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span><span class="info-lbl-5g">优先级 (QCI)</span></div><span class="info-val-5g" id="v-qci">--</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(255,77,79,0.1)"><svg viewBox="0 0 24 24" fill="#FF4D4F"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg></span><span class="info-lbl-5g">基站 ID (Cell)</span></div><span class="info-val-5g" id="v-cell">--</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(96,125,139,0.1)"><svg viewBox="0 0 24 24" fill="#607D8B"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg></span><span class="info-lbl-5g">IPv4 地址</span></div><span class="info-val-5g" id="v-ip4">--</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(121,85,72,0.1)"><svg viewBox="0 0 24 24" fill="#795548"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg></span><span class="info-lbl-5g">IPv6 地址</span></div><span class="info-val-5g info-val-long-5g" id="v-ip6" title="--">--</span></div>
-                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(0,150,136,0.1)"><svg viewBox="0 0 24 24" fill="#009688"><path d="M15 13V5c0-1.66-1.34-3-3-3S9 3.34 9 5v8c-1.21.91-2 2.37-2 4 0 2.76 2.24 5 5 5s5-2.24 5-5c0-1.63-.79-3.09-2-4z"/></svg></span><span class="info-lbl-5g">设备温度</span></div><span class="info-val-5g" id="v-temp">-- °C</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(250,140,22,0.1)"><svg viewBox="0 0 24 24" fill="#FA8C16"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span><span class="info-lbl-5g">基站 ID</span></div><span class="info-val-5g" id="v-cell">--</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(114,46,209,0.1)"><svg viewBox="0 0 24 24" fill="#722ED1"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span><span class="info-lbl-5g">SIM 状态</span></div><span class="info-val-5g" id="v-sim">--</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(96,125,139,0.1)"><svg viewBox="0 0 24 24" fill="#607D8B"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/></svg></span><span class="info-lbl-5g">IPv4</span></div><span class="info-val-5g" id="v-ip4">--</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(121,85,72,0.1)"><svg viewBox="0 0 24 24" fill="#795548"><path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/></svg></span><span class="info-lbl-5g">IPv6</span></div><span class="info-val-5g info-val-long-5g" id="v-ip6" title="--">--</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(0,150,136,0.1)"><svg viewBox="0 0 24 24" fill="#009688"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg></span><span class="info-lbl-5g">设备温度</span></div><span class="info-val-5g" id="v-temp">--</span></div>
+                        <div class="info-row-5g"><div class="info-l-5g"><span class="info-ico-5g" style="background:rgba(255,77,79,0.1)"><svg viewBox="0 0 24 24" fill="#FF4D4F"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></span><span class="info-lbl-5g">电压</span></div><span class="info-val-5g" id="v-volt">--</span></div>
                     </div>
                 </div>
             </div>
         </div>
-
-        <!-- 右侧 -->
         <div class="right-col-5g">
             <div class="card-5g">
                 <div class="card-hd-5g">
@@ -679,7 +188,6 @@
                             </div>
                         </div>
                     </div>
-
                     <div class="prog-title-5g">5G NR 指标</div>
                     <div style="margin-bottom:16px">
                         <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px">
@@ -702,39 +210,25 @@
                         </div>
                         <div class="prog-bar-5g"><div class="prog-fill-5g" id="bar-rsrq" style="width:0%;background-color:#FF4D4F"></div></div>
                     </div>
-
                     <div class="prog-title-5g">频段配置</div>
                     <div class="band-grid-5g">
                         <div class="band-card-5g">
                             <div style="width:32px;height:32px;border-radius:8px;background-color:rgba(138,43,226,0.1);color:#8A2BE2;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;">频</div>
-                            <div class="band-info-5g">
-                                <span class="band-label-5g">频段</span>
-                                <span class="band-value-5g" id="v-band">--</span>
-                            </div>
+                            <div class="band-info-5g"><span class="band-label-5g">频段</span><span class="band-value-5g" id="v-band">--</span></div>
                         </div>
                         <div class="band-card-5g">
                             <div style="width:32px;height:32px;border-radius:8px;background-color:rgba(24,144,255,0.1);color:#1890FF;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;">宽</div>
-                            <div class="band-info-5g">
-                                <span class="band-label-5g">带宽</span>
-                                <span class="band-value-5g" id="v-bw">-- MHz</span>
-                            </div>
+                            <div class="band-info-5g"><span class="band-label-5g">带宽</span><span class="band-value-5g" id="v-bw">-- MHz</span></div>
                         </div>
                         <div class="band-card-5g">
                             <div style="width:32px;height:32px;border-radius:8px;background-color:rgba(255,77,79,0.1);color:#FF4D4F;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;">A</div>
-                            <div class="band-info-5g">
-                                <span class="band-label-5g">ARFCN</span>
-                                <span class="band-value-5g" id="v-arfcn">--</span>
-                            </div>
+                            <div class="band-info-5g"><span class="band-label-5g">ARFCN</span><span class="band-value-5g" id="v-arfcn">--</span></div>
                         </div>
                         <div class="band-card-5g">
                             <div style="width:32px;height:32px;border-radius:8px;background-color:rgba(250,140,22,0.1);color:#FA8C16;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;">P</div>
-                            <div class="band-info-5g">
-                                <span class="band-label-5g">PCI</span>
-                                <span class="band-value-5g" id="v-pci">--</span>
-                            </div>
+                            <div class="band-info-5g"><span class="band-label-5g">PCI</span><span class="band-value-5g" id="v-pci">--</span></div>
                         </div>
                     </div>
-
                     <div class="prog-title-5g">天线分集</div>
                     <div class="ant-grid-5g">
                         <div class="ant-card-5g"><span class="ant-label-5g">MAIN</span><span class="ant-value-5g" id="v-main">--</span></div>
@@ -747,7 +241,86 @@
         </div>
     </div>
 </div>
-
-<script src="/5g-dashboard/main.js"></script>
+<script>
+(function(){
+    function H(v){return(v===null||v===undefined||v===''||v==='undefined'||v==='null'||v==='NaN')?'--':String(v)}
+    function num(v,fb){var n=parseFloat(v);return isNaN(n)?(fb||0):n}
+    function sigColor(p){if(p>=70)return'#52C41A';if(p>=40)return'#FAAD14';return'#FF4D4F'}
+    function barGrad(p){if(p>=70)return'#52C41A';if(p>=40)return'#FAAD14';return'#FF4D4F'}
+    var C=339.292;
+    function gaugeP(p){return C-(p/100)*C}
+    var bands=[];
+    function updateBars(score){
+        var bars=document.querySelectorAll('.bar-5g');
+        var n=Math.round(score/20);
+        bars.forEach(function(b,i){
+            b.className='bar-5g b'+(i+1)+'-5g';
+            if(i<n){if(score>=70)b.classList.add('a');else if(score>=40)b.classList.add('w');else b.classList.add('d')}
+        });
+    }
+    function render(d){
+        if(!d||d.error){d={networkStatus:'disconnected',operator:'--',networkMode:'--',rsrp:'--',rsrq:'--',sinr:'--',band:'--',bandwidth:'--',arfcn:'--',pci:'--',cellId:'--',temperature:'--',voltage:'--',simStatus:'--',ipv4:'--',ipv6:'--',downloadSpeed:'0',uploadSpeed:'0',antMain:'--',antDiv:'--',antMimo1:'--',antMimo2:'--'}}
+        var connected=d.networkStatus==='connected';
+        var dot=document.getElementById('st-dot'),txt=document.getElementById('st-txt');
+        if(dot)dot.style.background=connected?'#52C41A':'#FF4D4F';
+        if(txt)txt.textContent=connected?'已连接':'未连接';
+        var dl=num(d.downloadSpeed,0),ul=num(d.uploadSpeed,0);
+        var dls=dl.toFixed(2).split('.'), uls=ul.toFixed(2).split('.');
+        var el;
+        el=document.getElementById('dl-i');if(el)el.textContent=dls[0];
+        el=document.getElementById('dl-d');if(el)el.textContent='.'+dls[1];
+        el=document.getElementById('ul-i');if(el)el.textContent=uls[0];
+        el=document.getElementById('ul-d');if(el)el.textContent='.'+uls[1];
+        var ws=dl<1?'10s':dl<5?'8s':dl<20?'5s':'3s';
+        var card=document.getElementById('card-st');
+        if(card){card.style.setProperty('--ws',ws)}
+        var rp=num(d.rsrp,-130),si=num(d.sinr,-10),rq=num(d.rsrq,-25);
+        var rpP=Math.max(0,Math.min(100,((rp+130)/70)*100));
+        var siP=Math.max(0,Math.min(100,((si+10)/40)*100));
+        var rqP=Math.max(0,Math.min(100,((rq+25)/15)*100));
+        var score=Math.floor((rpP+siP)/2);
+        el=document.getElementById('gval');if(el)el.textContent=score+'%';
+        el=document.getElementById('gpg');if(el){el.style.strokeDashoffset=gaugeP(score);el.style.stroke=barGrad(score)}
+        updateBars(score);
+        var prog=[
+            ['bar-rsrp','v-rsrp',rpP,rp.toFixed(1)+' dBm'],
+            ['bar-sinr','v-sinr',siP,si.toFixed(1)+' dB'],
+            ['bar-rsrq','v-rsrq',rqP,rq.toFixed(1)+' dB']
+        ];
+        prog.forEach(function(p){
+            var bar=document.getElementById(p[0]),val=document.getElementById(p[1]);
+            if(bar){bar.style.width=p[2]+'%';bar.style.backgroundColor=barGrad(p[2])}
+            if(val)val.textContent=p[3];
+        });
+        var band=H(d.band);
+        if(band!=='--'&&band!=='0'){if(band.charAt(0)==='n'||band.charAt(0)==='N'){}else{var bn=parseInt(band,10);if(!isNaN(bn))band='n'+bn}}else{band='--'}
+        var bw=H(d.bandwidth);if(bw!=='--'&&!bw.match(/M$/))bw+=' MHz';
+        el=document.getElementById('v-band');if(el)el.textContent=band;
+        el=document.getElementById('v-bw');if(el)el.textContent=bw;
+        el=document.getElementById('v-arfcn');if(el)el.textContent=H(d.arfcn);
+        el=document.getElementById('v-pci');if(el)el.textContent=H(d.pci);
+        el=document.getElementById('v-op');if(el)el.textContent=H(d.operator);
+        el=document.getElementById('v-mode');if(el)el.textContent=H(d.networkMode);
+        el=document.getElementById('v-cell');if(el)el.textContent=H(d.cellId);
+        el=document.getElementById('v-sim');if(el)el.textContent=H(d.simStatus);
+        el=document.getElementById('v-ip4');if(el)el.textContent=H(d.ipv4);
+        el=document.getElementById('v-ip6');if(el){el.textContent=H(d.ipv6);el.title=H(d.ipv6)}
+        var temp=H(d.temperature);if(temp!=='--'&&temp.indexOf('\u00B0C')<0)temp+=' \u00B0C';
+        el=document.getElementById('v-temp');if(el)el.textContent=temp;
+        el=document.getElementById('v-volt');if(el)el.textContent=H(d.voltage);
+        el=document.getElementById('v-main');if(el)el.textContent=H(d.antMain)==='--'?'--':H(d.antMain)+' dBm';
+        el=document.getElementById('v-div');if(el)el.textContent=H(d.antDiv)==='--'?'--':H(d.antDiv)+' dBm';
+        el=document.getElementById('v-mimo1');if(el)el.textContent=H(d.antMimo1)==='--'?'--':H(d.antMimo1)+' dBm';
+        el=document.getElementById('v-mimo2');if(el)el.textContent=H(d.antMimo2)==='--'?'--':H(d.antMimo2)+' dBm';
+        var now=new Date();
+        el=document.getElementById('current-time');if(el)el.textContent=now.toLocaleString('zh-CN');
+    }
+    function load(){
+        fetch('/cgi-bin/get_5g_info').then(function(r){return r.json()}).then(function(d){render(d)}).catch(function(){render(null)})
+    }
+    load();
+    setInterval(load,5000);
+})();
+</script>
 </body>
 </html>

@@ -4,139 +4,206 @@ echo "Access-Control-Allow-Origin: *"
 echo ""
 
 IFACE="wwan0"
+QMI_STATUS="/tmp/modem_status.json"
 
-# 1. 自动发现 config_section (优先 enabled)
-CONFIG_SECTION=""
-for section in $(uci show qmodem 2>/dev/null | sed -n 's/qmodem\.\([^.]*\)\..*/\1/p' | sort -u); do
-    if uci get qmodem.$section.at_port >/dev/null 2>&1; then
-        STATE=$(uci get qmodem.$section.state 2>/dev/null)
-        if [ "$STATE" = "enabled" ]; then
-            CONFIG_SECTION="$section"
-            break
-        elif [ -z "$CONFIG_SECTION" ]; then
-            CONFIG_SECTION="$section"
-        fi
+# jsonfilter helper by key
+get_key() {
+    local json="$1" key="$2"
+    echo "$json" | jsonfilter -e "@.modem_info[@.key=\"$key\"].value" 2>/dev/null
+}
+
+plmn_to_operator() {
+    case "$1" in
+        46000|46002|46007|46008) echo "CMCC" ;;
+        46001|46006|46009)       echo "CUCC" ;;
+        46003|46005|46011)       echo "CTCC" ;;
+        46015|46004|46048)       echo "CBN" ;;
+        46049|46099)             echo "CTCC" ;;
+        *)                       echo "" ;;
+    esac
+}
+
+# Real-time speed from sysfs (200ms window)
+measure_speed() {
+    RX1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
+    TX1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
+    if command -v usleep >/dev/null 2>&1; then
+        usleep 200000
+    else
+        sleep 1
     fi
-done
-
-# 2. 速率 (优先usleep 200ms，降级sleep 1s)
-RX1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-TX1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-if command -v usleep >/dev/null 2>&1; then
-    usleep 200000
-    RX2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-    TX2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-    DL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($RX2 - $RX1) / 25000}")
-    UL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($TX2 - $TX1) / 25000}")
-else
-    sleep 1
     RX2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
     TX2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
     DL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($RX2 - $RX1) * 8 / 1000000}")
     UL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($TX2 - $TX1) * 8 / 1000000}")
-fi
+}
 
-# 3. 系统温度
-SYS_TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
-[ -n "$SYS_TEMP" ] && SYS_TEMP=$(awk "BEGIN {printf \"%.1f\", $SYS_TEMP/1000}") || SYS_TEMP="--"
+# Primary: official QModem ubus API
+if ubus list 2>/dev/null | grep -q qmodem; then
+    CONFIG_SECTION=""
+    for section in $(uci show qmodem 2>/dev/null | sed -n "s/qmodem\.\([^.]*\)\..*/\1/p" | sort -u); do
+        if uci get qmodem.$section.at_port >/dev/null 2>&1; then
+            STATE=$(uci get qmodem.$section.state 2>/dev/null)
+            if [ "$STATE" = "enabled" ]; then
+                CONFIG_SECTION="$section"
+                break
+            elif [ -z "$CONFIG_SECTION" ]; then
+                CONFIG_SECTION="$section"
+            fi
+        fi
+    done
 
-# 4. 默认值
-NET_STATUS="disconnected"; NET_MODE="--"; OPERATOR="--"; MCC="--"; MNC="--"
-CELLID="--"; PCI="--"; ARFCN="--"; BAND="--"; ULBW="--"; DLBW="--"; BW="--"
-RSRP="--"; RSRQ="--"; SINR="--"; QCI="--"; IMEI="--"
-IPV4="--"; IPV6="--"; MODEM_TEMP="$SYS_TEMP"; CONNECT_STATUS="No"
+    if [ -n "$CONFIG_SECTION" ]; then
+        BASE_RAW=$(ubus call qmodem base_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        CELL_RAW=$(ubus call qmodem cell_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        SIM_RAW=$(ubus call qmodem sim_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        NET_RAW=$(ubus call qmodem network_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
 
-# 5. ubus + jsonfilter
-get_val() { echo "$1" | jsonfilter -e "@.modem_info[$2].value" 2>/dev/null; }
+        if [ -n "$CELL_RAW" ]; then
+            NET_MODE=$(get_key "$CELL_RAW" "network_mode")
+            MCC=$(get_key "$CELL_RAW" "MCC")
+            MNC=$(get_key "$CELL_RAW" "MNC")
+            TAC=$(get_key "$CELL_RAW" "TAC")
+            CELLID=$(get_key "$CELL_RAW" "Cell ID")
+            PCI=$(get_key "$CELL_RAW" "Physical Cell ID")
+            ARFCN=$(get_key "$CELL_RAW" "ARFCN")
+            BAND=$(get_key "$CELL_RAW" "Band")
+            ULBW=$(get_key "$CELL_RAW" "UL Bandwidth")
+            DLBW=$(get_key "$CELL_RAW" "DL Bandwidth")
+            RSRP=$(get_key "$CELL_RAW" "RSRP")
+            RSRQ=$(get_key "$CELL_RAW" "RSRQ")
+            SINR=$(get_key "$CELL_RAW" "SINR")
+            CA_ARFCN=$(get_key "$CELL_RAW" "ARFCN (CA)")
+            CA_PCI=$(get_key "$CELL_RAW" "Physical Cell ID (CA)")
+            CA_BAND=$(get_key "$CELL_RAW" "Band (CA)")
+        fi
 
-if [ -n "$CONFIG_SECTION" ]; then
-    BASE_RAW=$(ubus call qmodem base_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-    CELL_RAW=$(ubus call qmodem cell_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-    SIM_RAW=$(ubus call qmodem sim_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        MODEM_TEMP=$(get_key "$BASE_RAW" "temperature")
+        VOLTAGE=$(get_key "$BASE_RAW" "voltage")
+        CONNECT_STATUS=$(get_key "$BASE_RAW" "connect_status")
 
-    if [ -n "$BASE_RAW" ]; then
-        MODEM_TEMP=$(get_val "$BASE_RAW" 4)
-        CONNECT_STATUS=$(get_val "$BASE_RAW" 6)
-    fi
+        SIM_STATUS=$(get_key "$SIM_RAW" "SIM Status")
+        ISP=$(get_key "$SIM_RAW" "ISP")
+        SIM_SLOT=$(get_key "$SIM_RAW" "SIM Slot")
+        IMEI=$(get_key "$SIM_RAW" "IMEI")
+        ICCID=$(get_key "$SIM_RAW" "ICCID")
+        IMSI=$(get_key "$SIM_RAW" "IMSI")
+        PHONE=$(get_key "$SIM_RAW" "SIM Number")
 
-    if [ -n "$CELL_RAW" ]; then
-        NET_MODE=$(get_val "$CELL_RAW" 0)
-        MCC=$(get_val "$CELL_RAW" 1)
-        MNC=$(get_val "$CELL_RAW" 2)
-        CELLID=$(get_val "$CELL_RAW" 4)
-        PCI=$(get_val "$CELL_RAW" 5)
-        ARFCN=$(get_val "$CELL_RAW" 6)
-        BAND=$(get_val "$CELL_RAW" 7)
-        ULBW=$(get_val "$CELL_RAW" 8 | sed 's/[^0-9.]//g')
-        DLBW=$(get_val "$CELL_RAW" 9 | sed 's/[^0-9.]//g')
-        RSRP=$(get_val "$CELL_RAW" 10)
-        RSRQ=$(get_val "$CELL_RAW" 11)
-        SINR=$(get_val "$CELL_RAW" 12)
-        BW="$DLBW"
-    fi
+        [ -z "$NET_MODE" ] && NET_MODE=$(get_key "$NET_RAW" "Network Type")
 
-    if [ -n "$SIM_RAW" ]; then
-        OPERATOR=$(get_val "$SIM_RAW" 1)
-        IMEI=$(get_val "$SIM_RAW" 3)
-    fi
-fi
+        # Normalize official mode strings
+        case "$NET_MODE" in
+            "NR5G-SA Mode"*) NET_MODE="NR5G-SA" ;;
+            "NR5G-NSA Mode"*) NET_MODE="NR5G-NSA" ;;
+            "EN-DC Mode"*) NET_MODE="NR5G-NSA" ;;
+            "LTE Mode"*) NET_MODE="LTE" ;;
+            "WCDMA Mode"*) NET_MODE="WCDMA" ;;
+            "NR5G") NET_MODE="NR5G-SA" ;;
+        esac
 
-# 6. uqmi 补充 QCI + 天线 (需要 kmod-qmi-proxy 才能工作)
-# 当前 qmodem 独占 /dev/cdc-wdm0，uqmi 会永久挂起
-# 等 kmod-qmi-proxy 编译进内核后再启用
-# QMI_DEV=""
-# for dev in /dev/cdc-wdm*; do
-#     [ -e "$dev" ] && QMI_DEV="$dev" && break
-# done
-# if [ -n "$QMI_DEV" ] && command -v uqmi >/dev/null 2>&1; then
-#     SIGNAL_RAW=$(timeout 2 uqmi -d "$QMI_DEV" --get-signal-info 2>/dev/null)
-#     ...
-# fi
+        # Operator: prefer PLMN, fallback to ISP/PLMN code
+        OPERATOR="$(plmn_to_operator "${MCC}${MNC}")"
+        [ -z "$OPERATOR" ] && OPERATOR="$ISP"
+        [ -z "$OPERATOR" ] || [ "$OPERATOR" = "????" ] && OPERATOR="${MCC}${MNC}"
+        [ -z "$OPERATOR" ] && OPERATOR="--"
 
-# 7. 网络状态
-[ "$CONNECT_STATUS" = "Yes" ] && NET_STATUS="connected"
-if [ -d "/sys/class/net/$IFACE" ]; then
-    CARRIER=$(cat /sys/class/net/$IFACE/carrier 2>/dev/null || echo 0)
-    [ "$CARRIER" = "1" ] && NET_STATUS="connected"
-fi
+        [ "$CONNECT_STATUS" = "Yes" ] && NET_STATUS="connected" || NET_STATUS="disconnected"
+        if [ -d "/sys/class/net/$IFACE" ]; then
+            CARRIER=$(cat /sys/class/net/$IFACE/carrier 2>/dev/null || echo 0)
+            [ "$CARRIER" = "1" ] && NET_STATUS="connected"
+        fi
 
-# 8. IP
-IPV4=$(ifconfig "$IFACE" 2>/dev/null | grep -oE 'inet addr:[0-9.]+' | cut -d: -f2)
-IPV6=$(ifconfig "$IFACE" 2>/dev/null | grep -oE 'inet6 addr: [^ ]+' | head -1 | cut -d' ' -f3)
-[ -z "$IPV4" ] && IPV4="--"
-[ -z "$IPV6" ] && IPV6="--"
+        IPV4=$(ip -4 addr show $IFACE 2>/dev/null | grep -oE "inet [0-9.]+" | awk '{print $2}')
+        IPV6=$(ip -6 addr show $IFACE 2>/dev/null | grep -oE "inet6 [0-9a-f:]+" | head -1 | awk '{print $2}')
+        [ -z "$IPV4" ] && IPV4="--"
+        [ -z "$IPV6" ] && IPV6="--"
 
-# 9. 温度格式化
-MODEM_TEMP=$(echo "$MODEM_TEMP" | sed 's/[^0-9.]//g')
-[ -n "$MODEM_TEMP" ] && MODEM_TEMP="${MODEM_TEMP}°C" || MODEM_TEMP="$SYS_TEMP"
+        measure_speed
 
-# 10. 输出 JSON
-[ -z "$ANT_MAIN" ] && ANT_MAIN="${RSRP:-"--"}"
-[ -z "$ANT_DIV" ] && ANT_DIV="${RSRP:-"--"}"
+        # Fallback values
+        [ -z "$MCC" ] && MCC="--"
+        [ -z "$MNC" ] && MNC="--"
+        [ -z "$TAC" ] && TAC="--"
+        [ -z "$CELLID" ] && CELLID="--"
+        [ -z "$PCI" ] && PCI="--"
+        [ -z "$ARFCN" ] && ARFCN="--"
+        [ -z "$BAND" ] && BAND="--"
+        [ -z "$DLBW" ] && DLBW="--"
+        [ -z "$ULBW" ] && ULBW="--"
+        [ -z "$RSRP" ] && RSRP="--"
+        [ -z "$RSRQ" ] && RSRQ="--"
+        [ -z "$SINR" ] && SINR="--"
+        [ -z "$MODEM_TEMP" ] && MODEM_TEMP="--"
+        [ -z "$VOLTAGE" ] && VOLTAGE="--"
+        [ -z "$SIM_STATUS" ] && SIM_STATUS="--"
+        [ -z "$IMEI" ] && IMEI="--"
+        [ -z "$ICCID" ] && ICCID="--"
+        [ -z "$IMSI" ] && IMSI="--"
+        [ -z "$PHONE" ] && PHONE="--"
+        [ -z "$CA_ARFCN" ] && CA_ARFCN="--"
+        [ -z "$CA_PCI" ] && CA_PCI="--"
+        [ -z "$CA_BAND" ] && CA_BAND="--"
 
-cat <<EOF
+        ANT_MAIN="$RSRP"; ANT_DIV="$RSRP"; ANT_MIMO1="$RSRP"; ANT_MIMO2="$RSRP"
+
+        cat <<EOF
 {
   "networkStatus": "${NET_STATUS}",
-  "networkMode": "${NET_MODE:-"--"}",
-  "operator": "${OPERATOR:-"--"}",
-  "band": "${BAND:-"--"}",
-  "bandwidth": "${BW:-"--"}",
-  "downloadBandwidth": "${DLBW:-"--"}",
-  "uploadBandwidth": "${ULBW:-"--"}",
-  "rsrp": "${RSRP:-"--"}",
-  "rsrq": "${RSRQ:-"--"}",
-  "sinr": "${SINR:-"--"}",
-  "arfcn": "${ARFCN:-"--"}",
-  "pci": "${PCI:-"--"}",
-  "cellId": "${CELLID:-"--"}",
-  "qci": "${QCI:-"--"}",
-  "imei": "${IMEI:-"--"}",
+  "networkMode": "${NET_MODE}",
+  "operator": "${OPERATOR}",
+  "band": "${BAND}",
+  "bandwidth": "${DLBW}",
+  "downloadBandwidth": "${DLBW}",
+  "uploadBandwidth": "${ULBW}",
+  "rsrp": "${RSRP}",
+  "rsrq": "${RSRQ}",
+  "sinr": "${SINR}",
+  "arfcn": "${ARFCN}",
+  "pci": "${PCI}",
+  "cellId": "${CELLID}",
+  "tac": "${TAC}",
+  "qci": "--",
+  "imei": "${IMEI}",
   "temperature": "${MODEM_TEMP}",
+  "voltage": "${VOLTAGE}",
+  "simStatus": "${SIM_STATUS}",
+  "iccid": "${ICCID}",
+  "imsi": "${IMSI}",
+  "phone": "${PHONE}",
+  "caArfcn": "${CA_ARFCN}",
+  "caPci": "${CA_PCI}",
+  "caBand": "${CA_BAND}",
   "downloadSpeed": "${DL_SPEED}",
   "uploadSpeed": "${UL_SPEED}",
-  "ipv4": "${IPV4:-"--"}",
-  "ipv6": "${IPV6:-"--"}",
+  "ipv4": "${IPV4}",
+  "ipv6": "${IPV6}",
   "antMain": "${ANT_MAIN}",
-  "antDiv": "${ANT_DIV}"
+  "antDiv": "${ANT_DIV}",
+  "antMimo1": "${ANT_MIMO1}",
+  "antMimo2": "${ANT_MIMO2}"
 }
+EOF
+        exit 0
+    fi
+fi
+
+# Fallback: collector cache
+if [ -f "$QMI_STATUS" ] && [ -s "$QMI_STATUS" ]; then
+    MODTIME=$(stat -c %Y "$QMI_STATUS" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+    AGE=$((NOW - MODTIME))
+    if [ "$AGE" -lt 10 ]; then
+        measure_speed
+        sed -e "s/\"downloadSpeed\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"downloadSpeed\": \"$DL_SPEED\"/" \
+            -e "s/\"downloadSpeed\"[[:space:]]*:[[:space:]]*[0-9.]*/\"downloadSpeed\": \"$DL_SPEED\"/" \
+            -e "s/\"uploadSpeed\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"uploadSpeed\": \"$UL_SPEED\"/" \
+            -e "s/\"uploadSpeed\"[[:space:]]*:[[:space:]]*[0-9.]*/\"uploadSpeed\": \"$UL_SPEED\"/" \
+            "$QMI_STATUS"
+        exit 0
+    fi
+fi
+
+cat <<EOF
+{"error":"modem data unavailable","networkStatus":"disconnected","operator":"--","networkMode":"--","temperature":"--"}
 EOF
