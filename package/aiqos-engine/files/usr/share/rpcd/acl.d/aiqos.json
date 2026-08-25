@@ -1,0 +1,25 @@
+{
+	"aiqos": {
+		"description": "AiQoS scenario, antenna and spatial control",
+		"read": {
+			"ubus": {
+				"aiqos": [
+					"get_scenario",
+					"get_status",
+					"get_spatial_info",
+					"get_antenna_mode"
+				]
+			},
+			"uci": [ "aiqos" ]
+		},
+		"write": {
+			"ubus": {
+				"aiqos": [
+					"set_scenario",
+					"set_antenna_mode"
+				]
+			},
+			"uci": [ "aiqos" ]
+		}
+	}
+}

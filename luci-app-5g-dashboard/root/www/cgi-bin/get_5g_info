@@ -5,8 +5,9 @@ echo ""
 
 IFACE="wwan0"
 QMI_STATUS="/tmp/modem_status.json"
+CACHE_FILE="/tmp/last_good_5g.json"
+UBUS_TIMEOUT=3
 
-# jsonfilter helper by key
 get_key() {
     local json="$1" key="$2"
     echo "$json" | jsonfilter -e "@.modem_info[@.key=\"$key\"].value" 2>/dev/null
@@ -22,23 +23,79 @@ plmn_to_operator() {
         *)                       echo "" ;;
     esac
 }
-
-# Real-time speed from sysfs (200ms window)
-measure_speed() {
-    RX1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-    TX1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-    if command -v usleep >/dev/null 2>&1; then
-        usleep 200000
-    else
-        sleep 1
-    fi
-    RX2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
-    TX2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
-    DL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($RX2 - $RX1) * 8 / 1000000}")
-    UL_SPEED=$(awk "BEGIN {printf \"%.2f\", ($TX2 - $TX1) * 8 / 1000000}")
+plmn_to_operator_zh() {
+    case "$1" in
+        46000|46002|46007|46008) echo "中国移动" ;;
+        46001|46006|46009)       echo "中国联通" ;;
+        46003|46005|46011)       echo "中国电信" ;;
+        46015|46004|46048)       echo "中国广电" ;;
+        46049|46099)             echo "中国电信" ;;
+        *)                       echo "" ;;
+    esac
 }
 
-# Primary: official QModem ubus API
+pick() {
+    local v="$1" fb="$2"
+    [ -n "$v" ] && [ "$v" != "--" ] && [ "$v" != "????" ] && echo "$v" && return
+    [ -n "$fb" ] && [ "$fb" != "--" ] && echo "$fb" && return
+    echo "--"
+}
+
+# Initialize all variables
+C_NET_STATUS=""; C_NET_MODE=""; C_OPERATOR=""; C_OPERATOR_ZH=""; C_BAND=""; C_BW=""
+C_RSRP=""; C_RSRQ=""; C_SINR=""; C_ARFCN=""; C_PCI=""; C_CELLID=""
+C_TAC=""; C_IMEI=""; C_TEMP=""; C_IPV4=""; C_IPV6=""
+C_ANT_MAIN=""; C_ANT_DIV=""; C_ANT_MIMO1=""; C_ANT_MIMO2=""
+C_QCI=""
+C_RX_BYTES=""; C_TX_BYTES=""; C_RXLEV=""; C_ANT_SOURCE=""
+C_CA_MODE=""; C_CA_BAND=""; C_CA_ARFCN=""; C_CA_PCI=""; C_CA_BW=""
+
+# Read from collector cache
+if [ -f "$QMI_STATUS" ] && [ -s "$QMI_STATUS" ]; then
+    MODTIME=$(stat -c %Y "$QMI_STATUS" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+    AGE=$((NOW - MODTIME))
+    if [ "$AGE" -lt 30 ]; then
+        C_NET_STATUS=$(jsonfilter -i "$QMI_STATUS" -e "@.networkStatus" 2>/dev/null)
+        C_NET_MODE=$(jsonfilter -i "$QMI_STATUS" -e "@.networkMode" 2>/dev/null)
+        C_OPERATOR=$(jsonfilter -i "$QMI_STATUS" -e "@.operator" 2>/dev/null)
+        C_OPERATOR_ZH=$(jsonfilter -i "$QMI_STATUS" -e "@.operatorZh" 2>/dev/null)
+        C_BAND=$(jsonfilter -i "$QMI_STATUS" -e "@.band" 2>/dev/null)
+        C_BW=$(jsonfilter -i "$QMI_STATUS" -e "@.bandwidth" 2>/dev/null)
+        C_RSRP=$(jsonfilter -i "$QMI_STATUS" -e "@.rsrp" 2>/dev/null)
+        C_RSRQ=$(jsonfilter -i "$QMI_STATUS" -e "@.rsrq" 2>/dev/null)
+        C_SINR=$(jsonfilter -i "$QMI_STATUS" -e "@.sinr" 2>/dev/null)
+        C_ARFCN=$(jsonfilter -i "$QMI_STATUS" -e "@.arfcn" 2>/dev/null)
+        C_PCI=$(jsonfilter -i "$QMI_STATUS" -e "@.pci" 2>/dev/null)
+        C_CELLID=$(jsonfilter -i "$QMI_STATUS" -e "@.cellId" 2>/dev/null)
+        C_TAC=$(jsonfilter -i "$QMI_STATUS" -e "@.tac" 2>/dev/null)
+        C_IMEI=$(jsonfilter -i "$QMI_STATUS" -e "@.imei" 2>/dev/null)
+        C_TEMP=$(jsonfilter -i "$QMI_STATUS" -e "@.temperature" 2>/dev/null)
+        C_IPV4=$(jsonfilter -i "$QMI_STATUS" -e "@.ipv4" 2>/dev/null)
+        C_IPV6=$(jsonfilter -i "$QMI_STATUS" -e "@.ipv6" 2>/dev/null)
+        C_ANT_MAIN=$(jsonfilter -i "$QMI_STATUS" -e "@.antMain" 2>/dev/null)
+        C_ANT_DIV=$(jsonfilter -i "$QMI_STATUS" -e "@.antDiv" 2>/dev/null)
+        C_ANT_MIMO1=$(jsonfilter -i "$QMI_STATUS" -e "@.antMimo1" 2>/dev/null)
+        C_ANT_MIMO2=$(jsonfilter -i "$QMI_STATUS" -e "@.antMimo2" 2>/dev/null)
+        C_QCI=$(jsonfilter -i "$QMI_STATUS" -e "@.qci" 2>/dev/null)
+        C_CA_MODE=$(jsonfilter -i "$QMI_STATUS" -e "@.caMode" 2>/dev/null)
+        C_CA_BAND=$(jsonfilter -i "$QMI_STATUS" -e "@.caBand" 2>/dev/null)
+        C_CA_ARFCN=$(jsonfilter -i "$QMI_STATUS" -e "@.caArfcn" 2>/dev/null)
+        C_CA_PCI=$(jsonfilter -i "$QMI_STATUS" -e "@.caPci" 2>/dev/null)
+        C_CA_BW=$(jsonfilter -i "$QMI_STATUS" -e "@.caBw" 2>/dev/null)
+        C_RX_BYTES=$(jsonfilter -i "$QMI_STATUS" -e "@.rxBytes" 2>/dev/null)
+        C_TX_BYTES=$(jsonfilter -i "$QMI_STATUS" -e "@.txBytes" 2>/dev/null)
+        C_RXLEV=$(jsonfilter -i "$QMI_STATUS" -e "@.rxlev" 2>/dev/null)
+        C_ANT_SOURCE=$(jsonfilter -i "$QMI_STATUS" -e "@.antSource" 2>/dev/null)
+    fi
+fi
+
+UBUS_CA_ARFCN=""; UBUS_CA_PCI=""; UBUS_CA_BAND=""
+UBUS_VOLTAGE=""; UBUS_TEMP=""; UBUS_SIM_STATUS=""
+UBUS_ICCID=""; UBUS_IMSI=""; UBUS_PHONE=""; UBUS_IMEI=""
+UBUS_NET_MODE=""; UBUS_OPERATOR=""
+UBUS_ISP=""; UBUS_MCC=""; UBUS_MNC=""
+
 if ubus list 2>/dev/null | grep -q qmodem; then
     CONFIG_SECTION=""
     for section in $(uci show qmodem 2>/dev/null | sed -n "s/qmodem\.\([^.]*\)\..*/\1/p" | sort -u); do
@@ -52,106 +109,187 @@ if ubus list 2>/dev/null | grep -q qmodem; then
             fi
         fi
     done
-
     if [ -n "$CONFIG_SECTION" ]; then
-        BASE_RAW=$(ubus call qmodem base_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-        CELL_RAW=$(ubus call qmodem cell_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-        SIM_RAW=$(ubus call qmodem sim_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-        NET_RAW=$(ubus call qmodem network_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
-
+        CELL_RAW=$(ubus -t $UBUS_TIMEOUT call qmodem cell_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        BASE_RAW=$(ubus -t $UBUS_TIMEOUT call qmodem base_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        SIM_RAW=$(ubus -t $UBUS_TIMEOUT call qmodem sim_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
+        NET_RAW=$(ubus -t $UBUS_TIMEOUT call qmodem network_info "{\"config_section\":\"$CONFIG_SECTION\"}" 2>/dev/null)
         if [ -n "$CELL_RAW" ]; then
-            NET_MODE=$(get_key "$CELL_RAW" "network_mode")
-            MCC=$(get_key "$CELL_RAW" "MCC")
-            MNC=$(get_key "$CELL_RAW" "MNC")
-            TAC=$(get_key "$CELL_RAW" "TAC")
-            CELLID=$(get_key "$CELL_RAW" "Cell ID")
-            PCI=$(get_key "$CELL_RAW" "Physical Cell ID")
-            ARFCN=$(get_key "$CELL_RAW" "ARFCN")
-            BAND=$(get_key "$CELL_RAW" "Band")
-            ULBW=$(get_key "$CELL_RAW" "UL Bandwidth")
-            DLBW=$(get_key "$CELL_RAW" "DL Bandwidth")
-            RSRP=$(get_key "$CELL_RAW" "RSRP")
-            RSRQ=$(get_key "$CELL_RAW" "RSRQ")
-            SINR=$(get_key "$CELL_RAW" "SINR")
-            CA_ARFCN=$(get_key "$CELL_RAW" "ARFCN (CA)")
-            CA_PCI=$(get_key "$CELL_RAW" "Physical Cell ID (CA)")
-            CA_BAND=$(get_key "$CELL_RAW" "Band (CA)")
+            UBUS_MCC=$(get_key "$CELL_RAW" "MCC")
+            UBUS_MNC=$(get_key "$CELL_RAW" "MNC")
+            UBUS_NET_MODE=$(get_key "$CELL_RAW" "network_mode")
+            UBUS_CA_ARFCN=$(get_key "$CELL_RAW" "ARFCN (CA)")
+            UBUS_CA_PCI=$(get_key "$CELL_RAW" "Physical Cell ID (CA)")
+            UBUS_CA_BAND=$(get_key "$CELL_RAW" "Band (CA)")
+            [ -z "$UBUS_CA_ARFCN" ] && UBUS_CA_ARFCN=$(get_key "$CELL_RAW" "CA ARFCN")
+            [ -z "$UBUS_CA_PCI" ] && UBUS_CA_PCI=$(get_key "$CELL_RAW" "CA Physical Cell ID")
+            [ -z "$UBUS_CA_BAND" ] && UBUS_CA_BAND=$(get_key "$CELL_RAW" "CA Band")
         fi
-
-        MODEM_TEMP=$(get_key "$BASE_RAW" "temperature")
-        VOLTAGE=$(get_key "$BASE_RAW" "voltage")
-        CONNECT_STATUS=$(get_key "$BASE_RAW" "connect_status")
-
-        SIM_STATUS=$(get_key "$SIM_RAW" "SIM Status")
-        ISP=$(get_key "$SIM_RAW" "ISP")
-        SIM_SLOT=$(get_key "$SIM_RAW" "SIM Slot")
-        IMEI=$(get_key "$SIM_RAW" "IMEI")
-        ICCID=$(get_key "$SIM_RAW" "ICCID")
-        IMSI=$(get_key "$SIM_RAW" "IMSI")
-        PHONE=$(get_key "$SIM_RAW" "SIM Number")
-
-        [ -z "$NET_MODE" ] && NET_MODE=$(get_key "$NET_RAW" "Network Type")
-
-        # Normalize official mode strings
-        case "$NET_MODE" in
-            "NR5G-SA Mode"*) NET_MODE="NR5G-SA" ;;
-            "NR5G-NSA Mode"*) NET_MODE="NR5G-NSA" ;;
-            "EN-DC Mode"*) NET_MODE="NR5G-NSA" ;;
-            "LTE Mode"*) NET_MODE="LTE" ;;
-            "WCDMA Mode"*) NET_MODE="WCDMA" ;;
-            "NR5G") NET_MODE="NR5G-SA" ;;
+        if [ -n "$BASE_RAW" ]; then
+            UBUS_TEMP=$(get_key "$BASE_RAW" "temperature")
+            UBUS_VOLTAGE=$(get_key "$BASE_RAW" "voltage")
+        fi
+        if [ -n "$SIM_RAW" ]; then
+            UBUS_SIM_STATUS=$(get_key "$SIM_RAW" "SIM Status")
+            UBUS_ISP=$(get_key "$SIM_RAW" "ISP")
+            UBUS_IMEI=$(get_key "$SIM_RAW" "IMEI")
+            UBUS_ICCID=$(get_key "$SIM_RAW" "ICCID")
+            UBUS_IMSI=$(get_key "$SIM_RAW" "IMSI")
+            UBUS_PHONE=$(get_key "$SIM_RAW" "SIM Number")
+            UBUS_ICCID=$(echo "$UBUS_ICCID" | tr -d "\n\r")
+            UBUS_IMSI=$(echo "$UBUS_IMSI" | tr -d "\n\r")
+            UBUS_PHONE=$(echo "$UBUS_PHONE" | tr -d "\n\r")
+            UBUS_IMEI=$(echo "$UBUS_IMEI" | tr -d "\n\r")
+        fi
+        [ -z "$UBUS_NET_MODE" ] && UBUS_NET_MODE=$(get_key "$NET_RAW" "Network Type")
+        case "$UBUS_NET_MODE" in
+            "NR5G-SA Mode"*) UBUS_NET_MODE="NR5G-SA" ;;
+            "NR5G-NSA Mode"*) UBUS_NET_MODE="NR5G-NSA" ;;
+            "EN-DC Mode"*) UBUS_NET_MODE="NR5G-NSA" ;;
+            "LTE Mode"*) UBUS_NET_MODE="LTE" ;;
+            "WCDMA Mode"*) UBUS_NET_MODE="WCDMA" ;;
+            "NR5G") UBUS_NET_MODE="NR5G-SA" ;;
         esac
+        UBUS_OPERATOR="$(plmn_to_operator "${UBUS_MCC}${UBUS_MNC}")"
+        [ -z "$UBUS_OPERATOR" ] && UBUS_OPERATOR="$UBUS_ISP"
+        [ -z "$UBUS_OPERATOR" ] || [ "$UBUS_OPERATOR" = "????" ] && UBUS_OPERATOR="${UBUS_MCC}${UBUS_MNC}"
+    fi
+fi
 
-        # Operator: prefer PLMN, fallback to ISP/PLMN code
-        OPERATOR="$(plmn_to_operator "${MCC}${MNC}")"
-        [ -z "$OPERATOR" ] && OPERATOR="$ISP"
-        [ -z "$OPERATOR" ] || [ "$OPERATOR" = "????" ] && OPERATOR="${MCC}${MNC}"
-        [ -z "$OPERATOR" ] && OPERATOR="--"
+# Speed
+DL_SPEED="0"; UL_SPEED="0"
+if [ -f "$QMI_STATUS" ] && [ -s "$QMI_STATUS" ]; then
+    _dl=$(jsonfilter -i "$QMI_STATUS" -e "@.downloadSpeed" 2>/dev/null)
+    _ul=$(jsonfilter -i "$QMI_STATUS" -e "@.uploadSpeed" 2>/dev/null)
+    [ -n "$_dl" ] && DL_SPEED="$_dl"
+    [ -n "$_ul" ] && UL_SPEED="$_ul"
+fi
 
-        [ "$CONNECT_STATUS" = "Yes" ] && NET_STATUS="connected" || NET_STATUS="disconnected"
-        if [ -d "/sys/class/net/$IFACE" ]; then
-            CARRIER=$(cat /sys/class/net/$IFACE/carrier 2>/dev/null || echo 0)
-            [ "$CARRIER" = "1" ] && NET_STATUS="connected"
-        fi
+# Network status
+NET_STATUS=$(pick "$C_NET_STATUS" "")
+[ "$NET_STATUS" = "Yes" ] && NET_STATUS="connected"
+if [ -d "/sys/class/net/$IFACE" ]; then
+    CARRIER=$(cat /sys/class/net/$IFACE/carrier 2>/dev/null || echo 0)
+    [ "$CARRIER" = "1" ] && NET_STATUS="connected"
+fi
+[ "$NET_STATUS" != "connected" ] && NET_STATUS="disconnected"
 
-        IPV4=$(ip -4 addr show $IFACE 2>/dev/null | grep -oE "inet [0-9.]+" | awk '{print $2}')
-        IPV6=$(ip -6 addr show $IFACE 2>/dev/null | grep -oE "inet6 [0-9a-f:]+" | head -1 | awk '{print $2}')
-        [ -z "$IPV4" ] && IPV4="--"
-        [ -z "$IPV6" ] && IPV6="--"
+# Primary fields
+NET_MODE=$(pick "$C_NET_MODE" "$UBUS_NET_MODE")
+OPERATOR=$(pick "$C_OPERATOR" "$UBUS_OPERATOR")
+OPERATOR_ZH=$(pick "$C_OPERATOR_ZH" "")
+BAND=$(pick "$C_BAND" "")
+DLBW=$(pick "$C_BW" "")
+ULBW=$(pick "" "$UBUS_ULBW")
+[ "$ULBW" = "--" ] || [ -z "$ULBW" ] && ULBW="$DLBW"
+RSRP=$(pick "$C_RSRP" "")
+RSRQ=$(pick "$C_RSRQ" "")
+SINR=$(pick "$C_SINR" "")
+ARFCN=$(pick "$C_ARFCN" "")
+PCI=$(pick "$C_PCI" "")
+CELLID=$(pick "$C_CELLID" "")
+TAC=$(pick "$C_TAC" "")
+IMEI=$(pick "$C_IMEI" "$UBUS_IMEI")
 
-        measure_speed
+# [FIX v6.2] QCI: dynamic read from collector, not hardcoded
+QCI=$(pick "$C_QCI" "")
+[ "$QCI" = "--" ] && [ "$QCI" = "" ] && QCI="--"
 
-        # Fallback values
-        [ -z "$MCC" ] && MCC="--"
-        [ -z "$MNC" ] && MNC="--"
-        [ -z "$TAC" ] && TAC="--"
-        [ -z "$CELLID" ] && CELLID="--"
-        [ -z "$PCI" ] && PCI="--"
-        [ -z "$ARFCN" ] && ARFCN="--"
-        [ -z "$BAND" ] && BAND="--"
-        [ -z "$DLBW" ] && DLBW="--"
-        [ -z "$ULBW" ] && ULBW="--"
-        [ -z "$RSRP" ] && RSRP="--"
-        [ -z "$RSRQ" ] && RSRQ="--"
-        [ -z "$SINR" ] && SINR="--"
-        [ -z "$MODEM_TEMP" ] && MODEM_TEMP="--"
-        [ -z "$VOLTAGE" ] && VOLTAGE="--"
-        [ -z "$SIM_STATUS" ] && SIM_STATUS="--"
-        [ -z "$IMEI" ] && IMEI="--"
-        [ -z "$ICCID" ] && ICCID="--"
-        [ -z "$IMSI" ] && IMSI="--"
-        [ -z "$PHONE" ] && PHONE="--"
-        [ -z "$CA_ARFCN" ] && CA_ARFCN="--"
-        [ -z "$CA_PCI" ] && CA_PCI="--"
-        [ -z "$CA_BAND" ] && CA_BAND="--"
+MODEM_TEMP=$(pick "$C_TEMP" "$UBUS_TEMP")
+[ "$MODEM_TEMP" = "0.0" ] && MODEM_TEMP=$(pick "" "$UBUS_TEMP")
+VOLTAGE=$(pick "" "$UBUS_VOLTAGE")
+SIM_STATUS=$(pick "" "$UBUS_SIM_STATUS")
+ICCID=$(pick "" "$UBUS_ICCID")
+IMSI=$(pick "" "$UBUS_IMSI")
+PHONE=$(pick "" "$UBUS_PHONE")
 
-        ANT_MAIN="$RSRP"; ANT_DIV="$RSRP"; ANT_MIMO1="$RSRP"; ANT_MIMO2="$RSRP"
+# CA fields
+CA_ARFCN=$(pick "$C_CA_ARFCN" "$UBUS_CA_ARFCN")
+CA_PCI=$(pick "$C_CA_PCI" "$UBUS_CA_PCI")
+CA_BAND=$(pick "$C_CA_BAND" "$UBUS_CA_BAND")
+CA_MODE=$(pick "$C_CA_MODE" "")
+CA_BW=$(pick "$C_CA_BW" "")
 
-        cat <<EOF
+# System uptime
+SYS_UPTIME="--"
+_uptime_secs=$(cat /proc/uptime 2>/dev/null | cut -d. -f1)
+if [ -n "$_uptime_secs" ]; then
+    _d=$((_uptime_secs/86400))
+    _h=$((_uptime_secs%86400/3600))
+    _m=$((_uptime_secs%3600/60))
+    if [ "$_d" -gt 0 ]; then SYS_UPTIME="${_d}d${_h}h${_m}m"; else SYS_UPTIME="${_h}h${_m}m"; fi
+fi
+
+# Data usage from modem_status
+RX_BYTES=$(pick "$C_RX_BYTES" "0")
+TX_BYTES=$(pick "$C_TX_BYTES" "0")
+
+# Antenna
+ANT_MAIN=$(pick "$C_ANT_MAIN" "$RSRP")
+ANT_DIV=$(pick "$C_ANT_DIV" "N/A")
+ANT_MIMO1=$(pick "$C_ANT_MIMO1" "N/A")
+ANT_MIMO2=$(pick "$C_ANT_MIMO2" "N/A")
+RXLEV=$(pick "$C_RXLEV" "")
+ANT_SOURCE=$(pick "$C_ANT_SOURCE" "none")
+
+# Operator Chinese name fallback
+if [ -z "$OPERATOR_ZH" ] || [ "$OPERATOR_ZH" = "--" ]; then
+    _plmn=""
+    if [ -n "$UBUS_MCC" ] && [ -n "$UBUS_MNC" ]; then
+        _plmn="${UBUS_MCC}${UBUS_MNC}"
+    else
+        _plmn="$OPERATOR"
+    fi
+    OPERATOR_ZH="$(plmn_to_operator_zh "$_plmn")"
+    [ -z "$OPERATOR_ZH" ] && OPERATOR_ZH="$OPERATOR"
+fi
+
+IPV4=$(pick "$C_IPV4" "")
+IPV6=$(pick "$C_IPV6" "")
+if [ "$IPV4" = "--" ] || [ -z "$IPV4" ]; then
+    IPV4=$(ip -4 addr show $IFACE 2>/dev/null | grep -oE "inet [0-9.]+" | awk '{print $2}')
+    [ -z "$IPV4" ] && IPV4="--"
+fi
+if [ "$IPV6" = "--" ] || [ -z "$IPV6" ]; then
+    IPV6=$(ip -6 addr show $IFACE 2>/dev/null | grep -oE "inet6 [0-9a-f:]+" | head -1 | awk '{print $2}')
+    [ -z "$IPV6" ] && IPV6="--"
+fi
+
+# Cache fallback
+if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+    [ "$SIM_STATUS" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.simStatus" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && SIM_STATUS="$_v"; }
+    [ "$ICCID" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.iccid" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && ICCID="$_v"; }
+    [ "$IMSI" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.imsi" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && IMSI="$_v"; }
+    [ "$PHONE" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.phone" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && PHONE="$_v"; }
+    [ "$IMEI" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.imei" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && IMEI="$_v"; }
+    [ "$VOLTAGE" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.voltage" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && VOLTAGE="$_v"; }
+    [ "$MODEM_TEMP" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.temperature" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && MODEM_TEMP="$_v"; }
+    [ "$QCI" = "--" ] && { _v=$(jsonfilter -i "$CACHE_FILE" -e "@.qci" 2>/dev/null); [ -n "$_v" ] && [ "$_v" != "--" ] && QCI="$_v"; }
+fi
+
+
+# LAN Port Status
+LAN_JSON="["
+FIRST_PORT=1
+for _iface in eth0 eth1 eth2 eth3 eth4 eth5 br-lan; do
+  if [ -d "/sys/class/net/$_iface" ]; then
+    _state=$(cat /sys/class/net/$_iface/operstate 2>/dev/null || echo "unknown")
+    _speed=$(cat /sys/class/net/$_iface/speed 2>/dev/null || echo "0")
+    [ "$_speed" = "4294967295" ] && _speed="0"
+    [ "$_speed" -gt 0 ] 2>/dev/null && _speed="${_speed}M" || _speed="--"
+    [ "$FIRST_PORT" -eq 1 ] || LAN_JSON="${LAN_JSON},"
+    LAN_JSON="${LAN_JSON}{\"name\":\"${_iface}\",\"state\":\"${_state}\",\"speed\":\"${_speed}\"}"
+    FIRST_PORT=0
+  fi
+done
+LAN_JSON="${LAN_JSON}]"
+
+cat <<EOF
 {
   "networkStatus": "${NET_STATUS}",
   "networkMode": "${NET_MODE}",
   "operator": "${OPERATOR}",
+  "operatorZh": "${OPERATOR_ZH}",
   "band": "${BAND}",
   "bandwidth": "${DLBW}",
   "downloadBandwidth": "${DLBW}",
@@ -163,7 +301,7 @@ if ubus list 2>/dev/null | grep -q qmodem; then
   "pci": "${PCI}",
   "cellId": "${CELLID}",
   "tac": "${TAC}",
-  "qci": "--",
+  "qci": "${QCI}",
   "imei": "${IMEI}",
   "temperature": "${MODEM_TEMP}",
   "voltage": "${VOLTAGE}",
@@ -171,39 +309,31 @@ if ubus list 2>/dev/null | grep -q qmodem; then
   "iccid": "${ICCID}",
   "imsi": "${IMSI}",
   "phone": "${PHONE}",
+  "caMode": "${CA_MODE}",
+  "caBand": "${CA_BAND}",
   "caArfcn": "${CA_ARFCN}",
   "caPci": "${CA_PCI}",
-  "caBand": "${CA_BAND}",
+  "caBw": "${CA_BW}",
   "downloadSpeed": "${DL_SPEED}",
   "uploadSpeed": "${UL_SPEED}",
   "ipv4": "${IPV4}",
   "ipv6": "${IPV6}",
+  "rxlev": "${RXLEV}",
+  "antSource": "${ANT_SOURCE}",
   "antMain": "${ANT_MAIN}",
   "antDiv": "${ANT_DIV}",
   "antMimo1": "${ANT_MIMO1}",
-  "antMimo2": "${ANT_MIMO2}"
+  "antMimo2": "${ANT_MIMO2}",
+  "rxBytes": "${RX_BYTES}",
+  "txBytes": "${TX_BYTES}",
+  "uptime": "${SYS_UPTIME}",
+  "firmware": "89628.1000.00.01.02.08",
+  "lanPorts": $LAN_JSON
 }
 EOF
-        exit 0
-    fi
-fi
 
-# Fallback: collector cache
-if [ -f "$QMI_STATUS" ] && [ -s "$QMI_STATUS" ]; then
-    MODTIME=$(stat -c %Y "$QMI_STATUS" 2>/dev/null || echo 0)
-    NOW=$(date +%s)
-    AGE=$((NOW - MODTIME))
-    if [ "$AGE" -lt 10 ]; then
-        measure_speed
-        sed -e "s/\"downloadSpeed\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"downloadSpeed\": \"$DL_SPEED\"/" \
-            -e "s/\"downloadSpeed\"[[:space:]]*:[[:space:]]*[0-9.]*/\"downloadSpeed\": \"$DL_SPEED\"/" \
-            -e "s/\"uploadSpeed\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"uploadSpeed\": \"$UL_SPEED\"/" \
-            -e "s/\"uploadSpeed\"[[:space:]]*:[[:space:]]*[0-9.]*/\"uploadSpeed\": \"$UL_SPEED\"/" \
-            "$QMI_STATUS"
-        exit 0
-    fi
+if [ "$NET_STATUS" = "connected" ] || [ "$RSRP" != "--" ]; then
+    cat > "$CACHE_FILE" <<CACHEEOF
+{"networkStatus":"${NET_STATUS}","networkMode":"${NET_MODE}","operator":"${OPERATOR}","operatorZh":"${OPERATOR_ZH}","band":"${BAND}","bandwidth":"${DLBW}","rsrp":"${RSRP}","rsrq":"${RSRQ}","sinr":"${SINR}","arfcn":"${ARFCN}","pci":"${PCI}","cellId":"${CELLID}","tac":"${TAC}","qci":"${QCI}","imei":"${IMEI}","temperature":"${MODEM_TEMP}","voltage":"${VOLTAGE}","simStatus":"${SIM_STATUS}","iccid":"${ICCID}","imsi":"${IMSI}","phone":"${PHONE}","caMode":"${CA_MODE}","caBand":"${CA_BAND}","caArfcn":"${CA_ARFCN}","caPci":"${CA_PCI}","caBw":"${CA_BW}","ipv4":"${IPV4}","ipv6":"${IPV6}","antMain":"${ANT_MAIN}","antDiv":"${ANT_DIV}","antMimo1":"${ANT_MIMO1}","antMimo2":"${ANT_MIMO2}","rxBytes":"${RX_BYTES}","txBytes":"${TX_BYTES}","uptime":"${SYS_UPTIME}","firmware":"89628.1000.00.01.02.08","lanPorts":$LAN_JSON}
+CACHEEOF
 fi
-
-cat <<EOF
-{"error":"modem data unavailable","networkStatus":"disconnected","operator":"--","networkMode":"--","temperature":"--"}
-EOF

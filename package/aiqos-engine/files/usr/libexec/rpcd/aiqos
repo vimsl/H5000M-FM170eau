@@ -1,0 +1,136 @@
+#!/bin/sh
+# AiQoS ubus RPC backend
+. /usr/share/libubox/jshn.sh
+
+case "$1" in
+list)
+	json_init
+	json_add_object "get_scenario"
+	json_close_object
+	json_add_object "set_scenario"
+	json_add_string "scenario"
+	json_close_object
+	json_add_object "get_status"
+	json_close_object
+	json_add_object "get_spatial_info"
+	json_close_object
+	json_add_object "get_antenna_mode"
+	json_close_object
+	json_add_object "set_antenna_mode"
+	json_add_string "mode"
+	json_close_object
+	json_dump
+	json_cleanup
+	;;
+call)
+	case "$2" in
+	get_scenario)
+		current=$(uci -q get aiqos.global.scenario)
+		locked="false"
+		[ "$current" != "auto" ] && locked="true"
+		json_init
+		json_add_string "current" "${current:-auto}"
+		json_add_boolean "locked" $locked
+		json_dump
+		json_cleanup
+		;;
+	set_scenario)
+		read input
+		scenario=$(echo "$input" | jsonfilter -e '$[0]' 2>/dev/null)
+		[ -z "$scenario" ] && scenario=$(echo "$input" | jsonfilter -e '$.scenario' 2>/dev/null)
+		case "$scenario" in
+		auto|urban|rural|wilderness|high_speed_rail|dark_cci|dark_throttle)
+			uci set aiqos.global.scenario="$scenario"
+			uci commit aiqos
+			killall -USR1 aiqosd 2>/dev/null
+			json_init
+			json_add_string "status" "ok"
+			json_dump
+			json_cleanup
+			;;
+		*)
+			json_init
+			json_add_string "error" "invalid scenario"
+			json_dump
+			json_cleanup
+			;;
+		esac
+		;;
+	get_antenna_mode)
+		mode=$(uci -q get aiqos.global.antenna_mode | tr -d '\r\n')
+		json_init
+		json_add_string "mode" "${mode:-auto}"
+		json_dump
+		json_cleanup
+		;;
+	set_antenna_mode)
+		read input
+		mode=$(echo "$input" | jsonfilter -e '$[0]' 2>/dev/null)
+		[ -z "$mode" ] && mode=$(echo "$input" | jsonfilter -e '$.mode' 2>/dev/null)
+		case "$mode" in
+		auto|omni|directional)
+			uci set aiqos.global.antenna_mode="$mode"
+			uci commit aiqos
+			echo "$mode" > /tmp/aiqos_antenna_mode
+			json_init
+			json_add_string "status" "ok"
+			json_add_string "mode" "$mode"
+			json_dump
+			json_cleanup
+			;;
+		*)
+			json_init
+			json_add_string "error" "invalid antenna mode"
+			json_dump
+			json_cleanup
+			;;
+		esac
+		;;
+	get_status)
+		scenario=$(cat /tmp/aiqos_scenario 2>/dev/null || echo "unknown")
+		rsrp=$(cat /tmp/aiqos_rsrp 2>/dev/null || echo "--")
+		sinr=$(cat /tmp/aiqos_sinr 2>/dev/null || echo "--")
+		rsrq=$(cat /tmp/aiqos_rsrq 2>/dev/null || echo "--")
+		target_bw=$(cat /tmp/aiqos_target_bw 2>/dev/null || echo "--")
+		handover=$(cat /tmp/aiqos_handover 2>/dev/null || echo "0")
+		json_init
+		json_add_string "scenario" "$scenario"
+		json_add_string "rsrp" "$rsrp"
+		json_add_string "rsrq" "$rsrq"
+		json_add_string "sinr" "$sinr"
+		json_add_string "target_bw" "$target_bw"
+		json_add_string "handover_count" "$handover"
+		json_add_object "profile"
+		json_add_string "kf_q" "$(cat /tmp/aiqos_profile_kf_q 2>/dev/null || echo "--")"
+		json_add_string "kf_r" "$(cat /tmp/aiqos_profile_kf_r 2>/dev/null || echo "--")"
+		json_add_string "pid_kp" "$(cat /tmp/aiqos_profile_pid_kp 2>/dev/null || echo "--")"
+		json_add_string "pid_ki" "$(cat /tmp/aiqos_profile_pid_ki 2>/dev/null || echo "--")"
+		json_add_string "pid_kd" "$(cat /tmp/aiqos_profile_pid_kd 2>/dev/null || echo "--")"
+		json_add_string "min_bw" "$(cat /tmp/aiqos_profile_min_bw 2>/dev/null || echo "--")"
+		json_add_string "ack_filter" "$(cat /tmp/aiqos_profile_ack_filter 2>/dev/null || echo "ack-filter-aggressive")"
+		json_close_object
+		json_dump
+		json_cleanup
+		;;
+	get_spatial_info)
+		json_init
+		json_add_array "rsrp_4ch"
+		for i in 0 1 2 3; do
+			v=$(cat /tmp/aiqos_spatial_rsrp$i 2>/dev/null || echo "--")
+			json_add_string "" "$v"
+		done
+		json_close_array
+		json_add_string "delta_v_h" "$(cat /tmp/aiqos_spatial_delta_v_h 2>/dev/null || echo "--")"
+		json_add_string "delta_h_v" "$(cat /tmp/aiqos_spatial_delta_h_v 2>/dev/null || echo "--")"
+		json_add_string "alignment_score" "$(cat /tmp/aiqos_spatial_score 2>/dev/null || echo "--")"
+		json_add_string "rank" "$(cat /tmp/aiqos_spatial_rank 2>/dev/null || echo "--")"
+		json_add_string "failsafe_status" "$(cat /tmp/aiqos_spatial_failsafe 2>/dev/null || echo "auto")"
+		json_add_string "advice" "$(cat /tmp/aiqos_spatial_advice 2>/dev/null || echo "--")"
+		mode=$(uci -q get aiqos.global.antenna_mode | tr -d '\r\n')
+		json_add_string "mode" "${mode:-auto}"
+		json_dump
+		json_cleanup
+		;;
+	esac
+	;;
+esac

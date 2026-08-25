@@ -1,0 +1,6 @@
+# AiQoS MSS clamp
+chain aiqos_mss_fix {
+    type filter hook forward priority -150; policy accept;
+    meta nfproto ipv4 tcp flags syn tcp option maxseg size set 1396
+    meta nfproto ipv6 tcp flags syn tcp option maxseg size set 1376
+}

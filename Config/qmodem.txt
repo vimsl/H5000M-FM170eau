@@ -21,11 +21,11 @@ CONFIG_PACKAGE_luci-i18n-modem-zh-cn=n
 CONFIG_PACKAGE_luci-app-qmodem-next=y
 CONFIG_PACKAGE_sms-forwarder-next=y
 #5G skb_tailroom热修复
-CONFIG_PACKAGE_kmod-qmi-fix-skb=y
 #CONFIG_PACKAGE_sms-tool=y
 CONFIG_PACKAGE_sms-tool_q=y
 CONFIG_OVERRIDE_PKGS="fibocom_QMI_WWAN quectel_MHI quectel_QMI_WWAN"
 #AI信号优化插件
-CONFIG_PACKAGE_luci-app-aiqos=y
+CONFIG_PACKAGE_aiqos-engine=y
+CONFIG_PACKAGE_aiqos-collector=y
 #CAKE qdisc内核模块
 CONFIG_PACKAGE_kmod-sched-cake=y

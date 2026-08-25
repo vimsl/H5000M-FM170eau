@@ -1,0 +1,53 @@
+#!/bin/sh /etc/rc.common
+# AiQoS aiqosd procd service
+# CAKE/ifb0 setup + sysctl tuning on start
+
+USE_PROCD=1
+START=95
+STOP=10
+
+PROG=/usr/bin/aiqosd
+
+setup_cake() {
+    # Create ifb0 if not exists
+    ip link add name ifb0 type ifb 2>/dev/null || true
+    ip link set dev ifb0 up
+
+    # Apply sysctl tuning
+    sysctl -p /etc/sysctl.d/99-aiqos-tcp.conf 2>/dev/null || true
+
+    # CAKE on wwan0 (uplink)
+    tc qdisc replace dev wwan0 root handle 1: cake bandwidth 50Mbit diffserv4 ack-filter memlimit 4M
+    tc qdisc replace dev wwan0 ingress handle ffff:
+    tc filter replace dev wwan0 parent ffff: protocol all prio 1 u32 match u32 0 0 action mirred egress redirect dev ifb0
+
+    # CAKE on ifb0 (downlink mirror)
+    tc qdisc replace dev ifb0 root handle 2: cake bandwidth 320Mbit diffserv4 memlimit 4M
+}
+
+start_service() {
+    local enabled
+    config_load aiqos
+    config_get enabled main enabled "1"
+
+    if [ "$enabled" != "1" ]; then
+        logger -t aiqosd "aiqosd disabled in UCI"
+        return 0
+    fi
+
+    logger -t aiqosd "Starting aiqosd engine"
+    setup_cake
+
+    procd_open_instance aiqosd
+    procd_set_param command "$PROG"
+    procd_set_param limits core="unlimited"
+    procd_set_param respawn 3600 5 1
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+
+stop_service() {
+    logger -t aiqosd "Stopping aiqosd engine"
+    killall aiqosd 2>/dev/null
+}

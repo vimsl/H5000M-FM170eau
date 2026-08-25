@@ -198,11 +198,8 @@ jobs:
           # 复制本地5G看板插件
           cp -rf $GITHUB_WORKSPACE/luci-app-5g-dashboard ./luci-app-5g-dashboard
 
-          # 复制qmi_fix_skb内核模块
-          cp -rf $GITHUB_WORKSPACE/package/qmi_fix_skb ./qmi_fix_skb
-
-          #复制luci-app-aiqos AI信号优化套件
-          cp -rf $GITHUB_WORKSPACE/luci-app-aiqos ./luci-app-aiqos
+          # 复制 AiQoS 引擎与采集器
+          cp -rf $GITHUB_WORKSPACE/package/aiqos-engine ./aiqos-engine
 
       - name: Patch HNAT DTS
         run: |
@@ -268,9 +265,6 @@ jobs:
           # 强制启用KPROBES（defconfig可能覆盖）
           sed -i 's/.*CONFIG_KPROBES.*/CONFIG_KPROBES=y/' .config
           grep -q "CONFIG_KPROBES=y" .config || echo "CONFIG_KPROBES=y" >> .config
-
-          #强制启用kmod-qmi-fix-skb（defconfig可能移除）
-          grep -q "CONFIG_PACKAGE_kmod-qmi-fix-skb=y" .config || echo "CONFIG_PACKAGE_kmod-qmi-fix-skb=y" >> .config
 
           # 强制内核重编
           make target/linux/clean -j$(nproc) || true

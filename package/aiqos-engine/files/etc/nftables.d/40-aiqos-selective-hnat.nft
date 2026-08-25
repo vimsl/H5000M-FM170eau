@@ -1,0 +1,9 @@
+# AiQoS Selective HNAT Bypass
+chain aiqos_bypass {
+    type filter hook prerouting priority -150; policy accept;
+    udp dport { 53, 123 } notrack accept
+    udp dport { 5000-65000 } notrack accept
+    ip protocol icmp notrack accept
+    ip6 nexthdr icmpv6 notrack accept
+    meta length < 256 notrack accept
+}
