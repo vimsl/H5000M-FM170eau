@@ -63,10 +63,11 @@ env:
 jobs:
   core:
     name: ${{inputs.WRT_SOURCE}}
-    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: Initialization Environment
         env:
@@ -101,7 +102,7 @@ jobs:
         run: |
           if [ -n "$WRT_COMMIT" ]; then
             echo "Pinning to commit: $WRT_COMMIT"
-            git clone --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
+            git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
             cd ./wrt/ && git checkout $WRT_COMMIT
           else
             git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
@@ -135,10 +136,46 @@ jobs:
             fi
           done
 
-          # 注入 TDTECH USB ID 补丁（FM170 Modem 支持，从原始 9998-dsa.patch 提取）
-          cp -f "$GITHUB_WORKSPACE/Scripts/9998-a-tdtech-usb.patch" "$HNAT_PATCH_DIR/"
-          # 注入能力标志修正补丁（从 9999-02 提取的 MTK_SRAM/MTK_HWLRO 移除）
-          cp -f "$GITHUB_WORKSPACE/Scripts/9999-02-capability.patch" "$HNAT_PATCH_DIR/"
+      - name: Prepare Kernel & Fix Capability
+        run: |
+          cd ./wrt/
+          TERM=dumb make target/linux/prepare V=s -j$(nproc)  # CI headless fix
+          TARGET_H="build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/linux-6.6.94/drivers/net/ethernet/mediatek/mtk_eth_soc.h"
+          if [ -f "$TARGET_H" ]; then
+            echo "=== Before fix ==="
+            grep -n "MT7981_CAPS\|MT7986_CAPS" "$TARGET_H"
+            sed -i 's/| MTK_SRAM | MTK_PDMA_INT | MTK_HWLRO)/| MTK_PDMA_INT)/g' "$TARGET_H"
+            echo "=== After fix ==="
+            grep -n "MT7981_CAPS\|MT7986_CAPS" "$TARGET_H"
+          else
+            echo "ERROR: mtk_eth_soc.h not found!"
+            find build_dir -name "mtk_eth_soc.h" 2>/dev/null
+          fi
+      - name: Apply FM170eau USB ID & Tailroom patches
+        run: |
+          set -e
+          echo "=== Applying FM170eau patches ==="
+          
+          # Find kernel source (match any 6.6.x version)
+          KERNEL_SRC=$(find build_dir -path "*/linux-6.6.*" -type d 2>/dev/null | head -1)
+          if [ -z "$KERNEL_SRC" ]; then
+            echo "ERROR: kernel source not found"
+            exit 1
+          fi
+          echo "Kernel source: $KERNEL_SRC"
+          
+          # Run external Python script to avoid YAML escaping issues
+          export KERNEL_SRC
+          python3 $GITHUB_WORKSPACE/Scripts/fm170_patch.py
+          
+          echo "=== FM170eau patches applied ==="
+      - name: Fix Dual-Forward Speed Drop
+        run: |
+          mkdir -p ./wrt/files/etc/sysctl.d
+          cat > ./wrt/files/etc/sysctl.d/99-disable-sw-offload.conf << 'EOF'
+          net.netfilter.nf_flowtable_offload=0
+          EOF
+          cat ./wrt/files/etc/sysctl.d/99-disable-sw-offload.conf
 
       - name: Check Scripts
         run: |
@@ -147,11 +184,12 @@ jobs:
       - name: Check Caches
         id: check-cache
         if: env.WRT_TEST != 'true'
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_HASH}}
           restore-keys: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}
           path: |
+            ./wrt/dl
             ./wrt/.ccache
             ./wrt/staging_dir/host*
             ./wrt/staging_dir/tool*
@@ -281,7 +319,7 @@ jobs:
         run: |
           cd ./wrt/
 
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) V=s
 
       - name: Machine Information
         run: |
@@ -320,7 +358,7 @@ jobs:
           fi
 
       - name: Release Firmware
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_DATE}}
           files: ./wrt/upload/*.*
@@ -346,3 +384,4 @@ jobs:
 
             内核版本：${{env.WRT_KVER}}
             插件列表：${{env.WRT_LIST}}
+

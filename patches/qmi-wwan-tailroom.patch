@@ -1,0 +1,15 @@
+--- a/drivers/net/usb/qmi_wwan.c
++++ b/drivers/net/usb/qmi_wwan.c
+@@ -1011,6 +1011,12 @@ static bool qmi_wwan_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
+ 	}
+ 
+ 	while (skb->len > 0) {
++		/* Ensure enough tailroom for PPPoE/VLAN encapsulation */
++		if (skb_tailroom(skb) < ETH_DATA_LEN) {
++			struct sk_buff *new_skb = skb_copy_expand(skb, 0, ETH_DATA_LEN, GFP_ATOMIC);
++			dev_kfree_skb_any(skb);
++			skb = new_skb ?: skb;
++		}
+ 		/* Ethernet frame length */
+ 		if (skb->len < 2)
+ 			break;
