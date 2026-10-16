@@ -17,6 +17,15 @@ https://github.com/padavanonly/immortalwrt-mt798x-6.6
   | `patches/fm170-qmi-wwan.patch` | 步骤 2：qmi_wwan.c 加 QMI_FIXED_INTF |
   | `patches/qmi-wwan-tailroom.patch` | 步骤 3：qmi_wwan.c tailroom 修复（**保留版**） |
   已删除的两份重复补丁：`Scripts/fix-qmi-skb.patch`（旧版，补丁位置在 rx_fixup 出口，与 tailroom 版同一问题）、`Scripts/fix-qmi-wwan-f.patch`（针对闭源 `qmi_wwan_f.c`，源码树里不存在该文件，且 hunk 行号是 `@@ -xxx` 占位符，从未被任何流程调用）。两文件内容保留在 git 历史中。
+- **⚠️ fm170_patch.py 三步的实际生效情况（2026-10 实测，用内核 v6.6.94 源码模拟 KERNEL_SRC 跑通验证）**：
+  | 步骤 | 目标 | 结果 |
+  |---|---|---|
+  | 1. option.c 加 FM170 USB ID | `0x0102` ECM/RNDIS + `0x01a0` MBIM | **不生效**——判定条件是同一行同时含 `Fibocom FM101-GL` 和 `RSVD(4)`，但真实文件里注释在 2368 行、`RSVD(4)` 在 2369 行，**永不匹配**。（另：`0x01a0` 上游本就有，NL668-AM/NL652-EU/FM101-GL 条目已覆盖） |
+  | 2. qmi_wwan.c 加 QMI_FIXED_INTF | `0x01a0` / `0x0102` | **生效**——锚点 `Fibocom FG132` 存在且唯一 |
+  | 3. qmi_wwan.c tailroom 修复 | 给 rx 路径补 tailroom | **不生效**——锚点 `while (skb->len > 0) {` 在 6.6 主线 `qmi_wwan.c` 里**不存在**（该循环只存在于旧版本/其他分支的写法）。且主线 `qmimux_rx_fixup()` 早已是 `netdev_alloc_skb(net, pkt_len + LL_MAX_HEADER)`，即上游已修 |
+  > 结论：**真正在起作用的是 kprobe 热修复模块**（`package/qmi_fix_skb/`，作用于闭源 `qmi_wwan_f` 驱动）——FM170-EAU 绑定的正是 `qmi_wwan_f`，而不是主线的 `qmi_wwan.c`。步骤 3 的 `patches/qmi-wwan-tailroom.patch` 因此只作历史/参考留存。
+  > 该脚本原先三步无论是否插入成功**都打印 "Patched ..."**，日志会误报；2026-10 已改为：未命中锚点时打印 `WARNING: ... NOT applied`，不再谎报成功。
+- **tailroom 片段的安全修复（2026-10）**：`dev_kfree_skb_any(skb); skb = new_skb ?: skb;` 在 `skb_copy_expand()`（`GFP_ATOMIC`）返回 NULL 时会释放原 skb 后回指，形成 **use-after-free**。已改为 `if (new_skb) { dev_kfree_skb_any(skb); skb = new_skb; }`，`fm170_patch.py` 步骤 3 与 `patches/qmi-wwan-tailroom.patch` 两处同步修改。
 - **AIQoS 白皮书**：`docs/H5000M-HNAT-AIQoS-白皮书-v2.1.md`（原 luci-app-aiqos 仓库迁入）。
 
 # 特性
