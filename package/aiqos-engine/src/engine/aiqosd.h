@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AiQoS - aiqosd core scheduling engine header
  *
  * P1 Dual-Track Control Architecture:
@@ -28,10 +28,14 @@ extern "C" {
 #endif
 
 /* ---- Core timing constants ---- */
-#define AIQOSD_VERSION           "4.4.0"
+#define AIQOSD_VERSION           "4.7.0"
 #define AIQOSD_CONTROL_MS        100      /* P1: Fast-track control period: 100ms (10Hz) */
 #define AIQOSD_COLD_START_S      1.5f
 #define AIQOSD_WATCHDOG_S        15
+#define AIQOSD_WATCHDOG_WARN_S   10
+#define AIQOSD_WATCHDOG_RESTART_S 15
+#define AIQOSD_WATCHDOG_RESET_S   45
+#define AIQOSD_WATCHDOG_RESTART_MAX 3
 #define AIQOSD_AMBR_PROBE_MIN    10
 
 /* ---- Bandwidth and interface constraints ---- */
@@ -66,14 +70,14 @@ static inline int sysfs_read_iface_bytes(const char *ifname,
     snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/rx_bytes", ifname);
     fp = fopen(path, "r");
     if (fp) {
-        if (fscanf(fp, "%lu", rx_bytes) != 1) { *rx_bytes = 0; ret = -1; }
+        if (fscanf(fp, "%llu", rx_bytes) != 1) { *rx_bytes = 0; ret = -1; }
         fclose(fp);
     } else { *rx_bytes = 0; ret = -1; }
 
     snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/tx_bytes", ifname);
     fp = fopen(path, "r");
     if (fp) {
-        if (fscanf(fp, "%lu", tx_bytes) != 1) { *tx_bytes = 0; ret = -1; }
+        if (fscanf(fp, "%llu", tx_bytes) != 1) { *tx_bytes = 0; ret = -1; }
         fclose(fp);
     } else { *tx_bytes = 0; ret = -1; }
 

@@ -1,0 +1,10 @@
+{
+	"admin/monitor/aiqos": {
+		"title": "AiQoS \u667a\u80fd\u9650\u901f",
+		"order": 40,
+		"action": {
+			"type": "view",
+			"path": "aiqos/aiqos"
+		}
+	}
+}

@@ -1,12 +1,25 @@
 #!/bin/sh /etc/rc.common
-START=99
+START=97
 STOP=10
 USE_PROCD=1
 
 start_service() {
+    # v64.5 重构 (9/11, R1-⑧): C speed_sampler 退役——500ms 速率采样已并入 Go collector
+    # (speedSamplerLoop, 原子写 /tmp/speed_now.json)。三写者(Go+C+shell speed_loop)收敛为 Go 单写者。
+    # 配合 Makefile 已停止安装该二进制（双保险）。回滚: 取消下方注释 + 恢复 Makefile install 行。
+    #if [ -x /usr/bin/speed_sampler ]; then
+    #    procd_open_instance speed_sampler
+    #    procd_set_param command /usr/bin/speed_sampler
+    #    procd_set_param respawn 3600 5 0
+    #    procd_set_param stderr 1
+    #    procd_close_instance
+    #fi
     procd_open_instance qmi-status-collector
     procd_set_param command /usr/bin/qmi_status_collector.sh
-    procd_set_param respawn 3600 5 5
+    # BUGFIX 2026-08-28 v2: retry=0 = 无限重试,永不因 crash loop 放弃 respawn。
+    # 教训(3.19.1):10 次崩溃/3600s 触发 procd crash-loop 拒启动,collector 死 7.5h 无守护。
+    # collector 是低危守护脚本,应无限重试;配合脚本内 acquire_lock PID 检测防多实例 + sendat timeout 防卡死。
+    procd_set_param respawn 3600 10 0
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance

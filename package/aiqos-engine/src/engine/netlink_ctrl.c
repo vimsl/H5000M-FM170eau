@@ -1,4 +1,4 @@
-﻿#include "netlink_ctrl.h"
+#include "netlink_ctrl.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,12 +23,13 @@ void nlctrl_close(void) {
     if (nl_sock >= 0) { close(nl_sock); nl_sock = -1; }
 }
 
-int nlctrl_set_cake_bw(const char *iface, uint32_t bw_bps) {
+int nlctrl_set_cake_bw(const char *iface, uint32_t bw_bps, uint32_t rtt_ms) {
     if (!iface) return -1;
-    char cmd[256];
+    if (!rtt_ms) rtt_ms = 45U;
+    char cmd[320];
     snprintf(cmd, sizeof(cmd),
-        "tc qdisc change dev %s root cake bandwidth %ubit diffserv4 ack-filter-aggressive memlimit 4M",
-        iface, bw_bps);
+        "tc qdisc change dev %s root handle 1: cake bandwidth %ubit diffserv4 " AIQOS_CAKE_ACKFILTER " memlimit " AIQOS_CAKE_MEMLIMIT " rtt %ums",
+        iface, bw_bps, rtt_ms);
     int r = system(cmd);
     (void)r;
     return 0;
@@ -37,25 +38,25 @@ int nlctrl_set_cake_bw(const char *iface, uint32_t bw_bps) {
 /*
  * Dual-interface CAKE dispatch:
  *   - ifb0  root CAKE: downlink (ingress redirected from wwan0)
- *   - wwan0 root CAKE: uplink   (egress, with ack-filter-aggressive)
+ *   - wwan0 root CAKE: uplink   (egress, with ack-filter)
  *
- * Uses "tc qdisc change" which only modifies the bandwidth parameter
- * on existing CAKE qdiscs (does not recreate them).
+ * Uses "tc qdisc change" + fixed handles so live flows keep their queue state.
  */
-int nlctrl_set_cake_dual(uint32_t dl_bps, uint32_t ul_bps) {
-    char cmd[512];
+int nlctrl_set_cake_dual(uint32_t dl_bps, uint32_t ul_bps, uint32_t rtt_ms) {
+    char cmd[640];
     int ret = 0;
+    if (!rtt_ms) rtt_ms = 45U;
 
     /* Downlink: ifb0 CAKE (no ack-filter, bidirectional fairness) */
     snprintf(cmd, sizeof(cmd),
-        "tc qdisc change dev ifb0 root cake bandwidth %ubit diffserv4 memlimit 4M",
-        dl_bps);
+        "tc qdisc change dev ifb0 root handle 2: cake bandwidth %ubit diffserv4 memlimit " AIQOS_CAKE_MEMLIMIT " rtt %ums",
+        dl_bps, rtt_ms);
     if (system(cmd) != 0) ret = -1;
 
-    /* Uplink: wwan0 CAKE (with ack-filter-aggressive for latency) */
+    /* Uplink: wwan0 CAKE (with ack-filter for latency) */
     snprintf(cmd, sizeof(cmd),
-        "tc qdisc change dev wwan0 root cake bandwidth %ubit diffserv4 ack-filter-aggressive memlimit 4M",
-        ul_bps);
+        "tc qdisc change dev wwan0 root handle 1: cake bandwidth %ubit diffserv4 " AIQOS_CAKE_ACKFILTER " memlimit " AIQOS_CAKE_MEMLIMIT " rtt %ums",
+        ul_bps, rtt_ms);
     if (system(cmd) != 0) ret = -1;
 
     return ret;

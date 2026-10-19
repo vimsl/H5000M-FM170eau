@@ -1,0 +1,191 @@
+#!/bin/sh /etc/rc.common
+# ============================================================================
+# AiQoS LAN foolproof / route aggregation mode switcher.
+#
+# ★ 2026-09-13 用户裁决（**按官方原实现还原**）：
+#   一手证据 = 官方固件 official_extracted/cyber_rootfs/etc/board.d/02_network:241-243
+#     hiveton,h5000m|\
+#     edgepi,e87n)
+#         ucidef_set_interfaces_lan_wan "eth0 hnat" eth1
+#   => LAN 桥 = eth0 + hnat ／ WAN = eth1
+#   本脚本随之把 WAN 口对齐为 **eth1**（原为 eth0，属"基准 B · 丝印优先"时代的反向命名）。
+#
+#   物理底座（DTS + 实测）：
+#     eth0 = gmac0 + 外置 RTL8221B 2.5G PHY   → 丝印 **2.5G WAN** 口
+#     eth1 = gmac1 + 内置 i2p5gbe 2.5G PHY    → 丝印 **2.5G LAN** 口
+#   ⚠️ 即"官方软件口径"与"外壳丝印"相反（厂商沿用上游参考设计所致）。
+#   用户裁决：**以官方原实现为准，不再按丝印反推**。
+#
+# 三种状态（默认 = 完全不干预，拓扑完全由 board.d/02_network 决定）：
+#   port_foolproof=0 / route_aggregation=0（**默认**）：直接 return，不碰 network
+#        ⇒ 拓扑 = 官方：eth0(+hnat) 在 br-lan，eth1 作 wan(dhcp)
+#   route_aggregation=1：显式确保 eth1 从 br-lan 摘出、配成 network.wan
+#        (dhcp, metric 20)，用于有线上行 / mwan3 双 WAN 聚合
+#   port_foolproof=1：eth0 + eth1 全桥进 br-lan，并停用 network.wan
+#        ⇒ 纯 5G CPE，两个网口都当 LAN 用（插哪个口都能进后台）
+#   ⚠️ route_aggregation 优先于 port_foolproof。
+# ============================================================================
+
+START=25
+STOP=95
+USE_PROCD=1
+
+# ---- 网口角色常量（必须与官方 board.d/02_network 对齐）----
+WANPORT=eth1
+LANPORT=eth0
+
+NETWORK_CHANGED=0
+
+get_aiqos_bool() {
+    local option="$1"
+    local default="$2"
+    local value
+
+    value=$(uci -q get "aiqos.main.$option")
+    [ -n "$value" ] || value=$(uci -q get "aiqos.@main[0].$option")
+
+    case "$value" in
+        1|on|true|yes|enabled) echo 1 ;;
+        0|off|false|no|disabled) echo 0 ;;
+        *) echo "$default" ;;
+    esac
+}
+
+get_bridge_index() {
+    uci show network 2>/dev/null | sed -n "s/^network\.@device\[\([0-9]*\)\]\.name='br-lan'/\1/p" | head -n 1
+}
+
+bridge_has_port() {
+    local br_idx="$1"
+    local wanted="$2"
+    local port
+
+    for port in $(uci -q get network.@device[$br_idx].ports); do
+        [ "$port" = "$wanted" ] && return 0
+    done
+    return 1
+}
+
+set_network_option() {
+    local section="$1"
+    local option="$2"
+    local value="$3"
+
+    [ "$(uci -q get network.$section.$option)" = "$value" ] && return 0
+    uci set network.$section.$option="$value"
+    NETWORK_CHANGED=1
+}
+
+# 把 network.wan 配到 WAN 口（= eth1，与官方 02_network 一致）
+set_wan_port() {
+    if [ "$(uci -q get network.wan)" != "interface" ]; then
+        uci set network.wan='interface'
+        NETWORK_CHANGED=1
+    fi
+
+    set_network_option wan device "$WANPORT"
+    set_network_option wan proto dhcp
+    set_network_option wan auto 1
+    set_network_option wan defaultroute 1
+    set_network_option wan peerdns 1
+    # WAN 必须显式设 metric，否则有线默认路由会抢在蜂窝(metric 11)之前
+    set_network_option wan metric 20
+}
+
+# 把 WAN 口（eth1）从 br-lan 摘出
+remove_wanport_from_bridge() {
+    local br_idx
+    local ports
+    local p
+
+    br_idx=$(get_bridge_index)
+    [ -n "$br_idx" ] || return 0
+
+    ports=$(uci -q get network.@device[$br_idx].ports)
+    bridge_has_port "$br_idx" "$WANPORT" || return 0
+
+    uci -q delete network.@device[$br_idx].ports
+    for p in $ports; do
+        [ "$p" != "$WANPORT" ] && uci add_list network.@device[$br_idx].ports="$p"
+    done
+    NETWORK_CHANGED=1
+}
+
+# 把 WAN 口（eth1）也桥进 br-lan —— 防呆模式下"WAN 口复用为 LAN 口"
+add_wanport_to_bridge() {
+    local br_idx
+
+    br_idx=$(get_bridge_index)
+    [ -n "$br_idx" ] || return 0
+
+    if ! bridge_has_port "$br_idx" "$WANPORT"; then
+        uci add_list network.@device[$br_idx].ports="$WANPORT"
+        NETWORK_CHANGED=1
+    fi
+}
+
+# 确保 LAN 口（eth0，丝印 2.5G WAN 口）在桥里 —— board.d/02_network 已保证，这里是兜底
+add_lanport_to_bridge() {
+    local br_idx
+
+    br_idx=$(get_bridge_index)
+    [ -n "$br_idx" ] || return 0
+
+    if ! bridge_has_port "$br_idx" "$LANPORT"; then
+        uci add_list network.@device[$br_idx].ports="$LANPORT"
+        NETWORK_CHANGED=1
+    fi
+}
+
+reload_network_if_changed() {
+    [ "$NETWORK_CHANGED" = "1" ] || return 0
+
+    uci commit network
+    /etc/init.d/network reload 2>/dev/null
+}
+
+apply_mode() {
+    local port_foolproof
+    local route_aggregation
+
+    NETWORK_CHANGED=0
+
+    # ★ 2026-09-13：默认改为「完全不干预」—— 拓扑交给官方同源的 board.d/02_network。
+    #   只有用户显式打开某个开关，本脚本才动 network。
+    port_foolproof=$(get_aiqos_bool port_foolproof 0)
+    route_aggregation=$(get_aiqos_bool route_aggregation 0)
+
+    [ -d /sys/class/net/$LANPORT ] || return 0
+    [ -d /sys/class/net/$WANPORT ] || return 0
+
+    if [ "$route_aggregation" = "1" ]; then
+        remove_wanport_from_bridge
+        set_wan_port
+        reload_network_if_changed
+        logger -t aiqos-lan "Route aggregation mode: $WANPORT is WAN, $LANPORT stays LAN (official-aligned)"
+        return 0
+    fi
+
+    [ "$port_foolproof" = "1" ] || return 0
+    add_wanport_to_bridge
+    add_lanport_to_bridge
+
+    if [ "$(uci -q get network.wan.device)" = "$WANPORT" ]; then
+        set_network_option wan device none
+        set_network_option wan proto none
+        set_network_option wan auto 0
+        reload_network_if_changed
+        logger -t aiqos-lan "Port foolproof applied: $LANPORT + $WANPORT bridged, wan interface disabled"
+        return 0
+    fi
+
+    reload_network_if_changed
+}
+
+start_service() {
+    apply_mode
+}
+
+stop_service() {
+    :
+}

@@ -1,0 +1,28 @@
+#!/bin/sh /etc/rc.common
+# AiQoS 默认路由动态确认脚本 (v5.5 方案A-B)
+# 防止 wwan0 拨号完成后默认路由缺失/漂移
+START=95
+STOP=10
+
+boot() {
+    start
+}
+
+start() {
+    local retry=0
+    # 等待 wwan0 获得 IP(最多 10s)
+    while [ $retry -lt 10 ]; do
+        if ip -4 addr show dev wwan0 | grep -q "inet"; then
+            break
+        fi
+        sleep 1
+        retry=$((retry + 1))
+    done
+
+    if ! ip route show default | grep -q "wwan0"; then
+        logger -t aiqos-route "Default route missing on wwan0! Recovering..."
+        ip route replace default dev wwan0 proto static
+    else
+        logger -t aiqos-route "Default route OK (wwan0)"
+    fi
+}

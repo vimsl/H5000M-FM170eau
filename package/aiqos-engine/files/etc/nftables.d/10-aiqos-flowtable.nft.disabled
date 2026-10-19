@@ -1,0 +1,9 @@
+# AiQoS 软卸载 flowtable (方案C 持久化)
+# BUGFIX 2026-08-28: fw4 被 immortalwrt 补丁硬禁(002-forbid-using-flow-offload.patch,
+# resolve_offload_devices 恒返回 []),永不生成 flowtable/offload 规则。
+# 通过 nftables.d include 机制(fw4 每次 reload 都会 include 本目录)持久化定义。
+# 注: 这是 Linux nf_flow_table 软卸载(CPU 快速路径);MTK PPE 硬件卸载是另一套机制(mtkhnat),不在此文件。
+flowtable f_offload {
+    hook ingress priority filter
+    devices = { br-lan, wwan0 }
+}

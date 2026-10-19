@@ -1,0 +1,36 @@
+#!/bin/sh /etc/rc.common
+# ============================================================================
+# ⚠️ 本脚本【有意未安装】—— 不在 aiqos-engine/Makefile 的 install 段内。
+#
+# 原因：它建立 nftables flowtable（软件流卸载），会把已建连流量【绕过 qdisc】，
+#       从而使 CAKE 整形/限速失效（本板 P1 终审 = CAKE-only 最优，PPE/hook 类
+#       卸载已被证不可用，见核心升级方案 D.5）。
+#       留着是为了将来若改走"卸载优先"路线时可直接启用。
+#
+# 若确要启用：① 把本文件加进 Makefile 的 install 段 ② 同时重新评估 CAKE 策略
+# ③ 上机复验：CAKE 是否仍在整形、吞吐/时延是否变化、有无内核告警。
+# ============================================================================
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    sleep 2
+    nft list flowtable inet fw4 f_offload >/dev/null 2>&1 || {
+        nft add flowtable inet fw4 f_offload '{ hook ingress priority filter; devices = { br-lan, eth1, wwan0 }; }'
+        logger -t aiqos-flow-offload "Created flowtable f_offload"
+    }
+    accept_handle=$(nft -a list chain inet fw4 forward 2>/dev/null | grep 'Handle forwarded flows' | grep -oE 'handle [0-9]+' | awk '{print $2}')
+    if [ -n "$accept_handle" ]; then
+        old_handle=$(nft -a list chain inet fw4 forward 2>/dev/null | grep 'flow add @f_offload' | grep -oE 'handle [0-9]+' | awk '{print $2}')
+        [ -n "$old_handle" ] && nft delete rule inet fw4 forward handle "$old_handle"
+        nft insert rule inet fw4 forward position "$accept_handle" ct state established,related meta l4proto { tcp, udp } flow add @f_offload
+        logger -t aiqos-flow-offload "Offload rule inserted before accept (handle $accept_handle)"
+    else
+        logger -t aiqos-flow-offload "WARN: accept rule handle not found"
+    fi
+}
+
+service_triggers() {
+    procd_add_reload_trigger firewall
+}

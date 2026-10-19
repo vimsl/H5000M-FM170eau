@@ -1,0 +1,12 @@
+#!/bin/sh
+# aiqos-engine: 编译期无法执行 postinst enable (IPKG_INSTROOT 非空时被跳过),
+# 固件出厂后首次启动由 uci-defaults 补齐服务自启, 执行后本文件自动删除。
+# 事故背景: v63.2b 出厂 aiqosd 未自启 -> 面板 AiQoS 卡全 "--" (2026-09-09)
+[ -x /etc/init.d/aiqosd ] && /etc/init.d/aiqosd enable
+[ -x /etc/init.d/aiqos-collector ] && /etc/init.d/aiqos-collector enable
+[ -x /etc/init.d/aiqos-lan-foolproof ] && /etc/init.d/aiqos-lan-foolproof enable
+[ -x /etc/init.d/aiqos-eth-monitor ] && /etc/init.d/aiqos-eth-monitor enable
+[ -x /etc/init.d/aiqos-route-fix ] && /etc/init.d/aiqos-route-fix enable
+[ -x /etc/init.d/aiqos-dataplane-guard ] && /etc/init.d/aiqos-dataplane-guard enable
+[ -x /etc/init.d/qmi-status-collector ] && /etc/init.d/qmi-status-collector enable
+exit 0

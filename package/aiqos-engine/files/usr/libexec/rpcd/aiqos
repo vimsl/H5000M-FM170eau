@@ -1,6 +1,28 @@
 #!/bin/sh
 # AiQoS ubus RPC backend
+# BUGFIX 2026-08-28: 设备 UCI 配置是匿名 section @main[0],原 aiqos.global 写入失败(ret=1)。
+# 改为优先 @main[0], 兼容 legacy global 键名。
 . /usr/share/libubox/jshn.sh
+
+# 通用 UCI 读取: 优先 @main[0], fallback global
+aiqos_get() {
+	local val
+	val=$(uci -q get "aiqos.@main[0].$1" 2>/dev/null)
+	[ -z "$val" ] && val=$(uci -q get "aiqos.global.$1" 2>/dev/null)
+	echo "$val"
+}
+
+# 通用 UCI 写入: 写 @main[0], 清理 legacy global
+aiqos_set() {
+	uci set "aiqos.@main[0].$1=$2" && \
+	uci commit aiqos && \
+	{ uci -q delete "aiqos.global.$1" 2>/dev/null; uci -q commit aiqos; } || true
+}
+
+aiqos_delete() {
+	uci -q delete "aiqos.@main[0].$1" 2>/dev/null
+	{ uci -q delete "aiqos.global.$1" 2>/dev/null; uci -q commit aiqos; } || true
+}
 
 case "$1" in
 list)
@@ -18,6 +40,7 @@ list)
 	json_close_object
 	json_add_object "set_antenna_mode"
 	json_add_string "mode"
+	json_add_boolean "force"
 	json_close_object
 	json_dump
 	json_cleanup
@@ -25,7 +48,7 @@ list)
 call)
 	case "$2" in
 	get_scenario)
-		current=$(uci -q get aiqos.global.scenario)
+		current=$(aiqos_get scenario)
 		locked="false"
 		[ "$current" != "auto" ] && locked="true"
 		json_init
@@ -40,8 +63,7 @@ call)
 		[ -z "$scenario" ] && scenario=$(echo "$input" | jsonfilter -e '$.scenario' 2>/dev/null)
 		case "$scenario" in
 		auto|urban|rural|wilderness|high_speed_rail|dark_cci|dark_throttle)
-			uci set aiqos.global.scenario="$scenario"
-			uci commit aiqos
+			aiqos_set scenario "$scenario"
 			killall -USR1 aiqosd 2>/dev/null
 			json_init
 			json_add_string "status" "ok"
@@ -57,7 +79,7 @@ call)
 		esac
 		;;
 	get_antenna_mode)
-		mode=$(uci -q get aiqos.global.antenna_mode | tr -d '\r\n')
+		mode=$(aiqos_get antenna_mode | tr -d '\r\n')
 		json_init
 		json_add_string "mode" "${mode:-auto}"
 		json_dump
@@ -67,16 +89,29 @@ call)
 		read input
 		mode=$(echo "$input" | jsonfilter -e '$[0]' 2>/dev/null)
 		[ -z "$mode" ] && mode=$(echo "$input" | jsonfilter -e '$.mode' 2>/dev/null)
+		# v63.5.1 (H5 治理): 支持 force；统一走单一写者 helper，消除与 LuCI controller 的实现漂移
+		force=$(echo "$input" | jsonfilter -e '$.force' 2>/dev/null)
+		[ -z "$force" ] && force=$(echo "$input" | jsonfilter -e '$[1]' 2>/dev/null)
+		case "$force" in
+		true|1|yes) force=1 ;;
+		*)          force=0 ;;
+		esac
 		case "$mode" in
 		auto|omni|directional)
-			uci set aiqos.global.antenna_mode="$mode"
-			uci commit aiqos
-			echo "$mode" > /tmp/aiqos_antenna_mode
-			json_init
-			json_add_string "status" "ok"
-			json_add_string "mode" "$mode"
-			json_dump
-			json_cleanup
+			if /usr/libexec/aiqos-set-antenna "$mode" "$force" 2>/dev/null; then
+				[ "$force" = "1" ] && _fb="true" || _fb="false"
+				json_init
+				json_add_string "status" "ok"
+				json_add_string "mode" "$mode"
+				json_add_boolean "forced" "$_fb"
+				json_dump
+				json_cleanup
+			else
+				json_init
+				json_add_string "error" "set antenna mode failed"
+				json_dump
+				json_cleanup
+			fi
 			;;
 		*)
 			json_init
@@ -93,6 +128,8 @@ call)
 		rsrq=$(cat /tmp/aiqos_rsrq 2>/dev/null || echo "--")
 		target_bw=$(cat /tmp/aiqos_target_bw 2>/dev/null || echo "--")
 		handover=$(cat /tmp/aiqos_handover 2>/dev/null || echo "0")
+		srqi_score=$(cat /tmp/aiqos_spatial_score 2>/dev/null || echo "--")
+		spatial_advice=$(cat /tmp/aiqos_spatial_advice 2>/dev/null || echo "--")
 		json_init
 		json_add_string "scenario" "$scenario"
 		json_add_string "rsrp" "$rsrp"
@@ -100,6 +137,8 @@ call)
 		json_add_string "sinr" "$sinr"
 		json_add_string "target_bw" "$target_bw"
 		json_add_string "handover_count" "$handover"
+		json_add_string "srqi_score" "$srqi_score"
+		json_add_string "spatial_advice" "$spatial_advice"
 		json_add_object "profile"
 		json_add_string "kf_q" "$(cat /tmp/aiqos_profile_kf_q 2>/dev/null || echo "--")"
 		json_add_string "kf_r" "$(cat /tmp/aiqos_profile_kf_r 2>/dev/null || echo "--")"
@@ -126,7 +165,7 @@ call)
 		json_add_string "rank" "$(cat /tmp/aiqos_spatial_rank 2>/dev/null || echo "--")"
 		json_add_string "failsafe_status" "$(cat /tmp/aiqos_spatial_failsafe 2>/dev/null || echo "auto")"
 		json_add_string "advice" "$(cat /tmp/aiqos_spatial_advice 2>/dev/null || echo "--")"
-		mode=$(uci -q get aiqos.global.antenna_mode | tr -d '\r\n')
+		mode=$(aiqos_get antenna_mode | tr -d '\r\n')
 		json_add_string "mode" "${mode:-auto}"
 		json_dump
 		json_cleanup

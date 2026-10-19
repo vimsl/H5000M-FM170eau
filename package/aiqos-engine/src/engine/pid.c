@@ -53,10 +53,35 @@ float pid_update(PIDController *pid, float kalman_est, uint32_t measured_kbit,
      * P1 fix: Scale soft_cap decay to dt.
      * Original: decay=0.98 per 2s cycle -> tau ≈ 99 cycles = 198s
      * Now: decay^(dt/2.0) per cycle -> same wall-clock tau regardless of rate
+     *
+     * BUGFIX 2026-08-27: 原实现 soft_cap 只衰减不回升, 每周期乘以 decay(<1),
+     * 从 soft_cap_init(500Mbps) 约 12 分钟单向衰减到接近 min_bw(14Mbps),
+     * pid_get_target() 中 cap=min(max_bw, AMBR, soft_cap) 被 soft_cap 压死,
+     * 造成 CAKE 限速恶性循环(空载 fast_rx=0 -> 无回升机制 -> 越用越慢)。
+     * 修复: 以信道容量估计 kalman_est 为锚点双向校准 —— 容量高于 soft_cap 时回升,
+     * 容量低于时才衰减; 并加下限保护, 防止衰减到荒谬低值。
+     * 对应 v5.5 方案"三档基线锚点"(base_bw 自学习, 避免从极高上限向下缓慢收敛)。
      */
     float ref_dt = 2.0f;  /* original reference period */
-    float scaled_decay = powf(cfg->soft_cap_decay, dt / ref_dt);
-    pid->soft_cap *= scaled_decay;
+    if (kalman_est > pid->soft_cap) {
+        /* 信道容量高于当前 soft_cap: 回升(每 2s 约 +10%, 快速响应信号变好) */
+        pid->soft_cap *= (1.0f + 0.10f * (dt / ref_dt));
+        if (pid->soft_cap > cfg->soft_cap_init)
+            pid->soft_cap = cfg->soft_cap_init;
+    } else {
+        /* 信道容量低于 soft_cap: 缓慢衰减 */
+        float scaled_decay = powf(cfg->soft_cap_decay, dt / ref_dt);
+        pid->soft_cap *= scaled_decay;
+    }
+
+    /* 下限保护: soft_cap 不低于 max(2*min_bw, 0.8*容量估计), 防止衰减到荒谬低值 */
+    float cap_floor = (float)cfg->min_bw_kbit * 2.0f;
+    if (kalman_est > 0 && kalman_est * 0.8f > cap_floor)
+        cap_floor = kalman_est * 0.8f;
+    if (pid->soft_cap < cap_floor)
+        pid->soft_cap = cap_floor;
+    if (pid->soft_cap > cfg->soft_cap_init)
+        pid->soft_cap = cfg->soft_cap_init;
 
     return output;
 }

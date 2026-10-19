@@ -3,6 +3,7 @@
 'require rpc';
 'require form';
 'require ui';
+'require poll';
 
 var getScenario = rpc.declare({
 	object: 'aiqos',
@@ -81,7 +82,7 @@ return view.extend({
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '目标带宽'),
-				E('td', { 'class': 'td' }, fmtBw(statusData.target_bw))
+				E('td', { 'class': 'td', 'id': 'aq_target_bw' }, fmtBw(statusData.target_bw))
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '切换次数/分钟'),
@@ -101,7 +102,7 @@ return view.extend({
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '最低保障带宽'),
-				E('td', { 'class': 'td' }, fmtBw(prof.min_bw))
+				E('td', { 'class': 'td', 'id': 'aq_min_bw' }, fmtBw(prof.min_bw))
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, 'ACK 过滤'),
@@ -113,23 +114,23 @@ return view.extend({
 		var spatialTable = E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '4 路天线 RSRP'),
-				E('td', { 'class': 'td' }, rsrp4.length === 4 ? rsrp4.join(' / ') + ' dBm' : '--')
+				E('td', { 'class': 'td', 'id': 'aq_rsrp4' }, rsrp4.length === 4 ? rsrp4.join(' / ') + ' dBm' : '--')
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '垂直/水平极化差'),
-				E('td', { 'class': 'td' }, '%s / %s dB'.format(spatialData.delta_v_h || '--', spatialData.delta_h_v || '--'))
+				E('td', { 'class': 'td', 'id': 'aq_delta' }, '%s / %s dB'.format(spatialData.delta_v_h || '--', spatialData.delta_h_v || '--'))
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '对准分 SRQI'),
-				E('td', { 'class': 'td' }, spatialData.alignment_score || '--')
+				E('td', { 'class': 'td', 'id': 'aq_srqi' }, spatialData.alignment_score || '--')
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, 'MIMO Rank'),
-				E('td', { 'class': 'td' }, spatialData.rank || '--')
+				E('td', { 'class': 'td', 'id': 'aq_rank' }, spatialData.rank || '--')
 			]),
 			E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, '防呆状态'),
-				E('td', { 'class': 'td' }, spatialData.failsafe_status || '--')
+				E('td', { 'class': 'td', 'id': 'aq_failsafe' }, spatialData.failsafe_status || '--')
 			])
 		]);
 
@@ -149,6 +150,47 @@ return view.extend({
 			});
 		});
 
+				poll.add(function() {
+			return getSpatialInfo().then(function(d) {
+				if (!d) return;
+				var rsrp4 = d.rsrp_4ch || [];
+				var el;
+
+				el = document.getElementById('aq_rsrp4');
+				if (el) el.textContent = rsrp4.length === 4 ? rsrp4.join(' / ') + ' dBm' : '--';
+
+				el = document.getElementById('aq_delta');
+				if (el) el.textContent = '%s / %s dB'.format(d.delta_v_h || '--', d.delta_h_v || '--');
+
+				el = document.getElementById('aq_srqi');
+				if (el) el.textContent = d.alignment_score || '--';
+
+				el = document.getElementById('aq_rank');
+				if (el) el.textContent = d.rank || '--';
+
+				el = document.getElementById('aq_failsafe');
+				if (el) el.textContent = d.failsafe_status || '--';
+			});
+		}, 2);
+		poll.add(function() {
+			return getStatus().then(function(sData) {
+				if (!sData) return;
+				var sProf = sData.profile || {}; var el2;
+				el2 = document.getElementById('aq_scenario'); if (el2) el2.textContent = sData.scenario || '--';
+				el2 = document.getElementById('aq_rsrp'); if (el2) el2.textContent = (sData.rsrp || '--') + ' dBm';
+				el2 = document.getElementById('aq_rsrq'); if (el2) el2.textContent = (sData.rsrq || '--') + ' dB';
+				el2 = document.getElementById('aq_sinr'); if (el2) el2.textContent = (sData.sinr || '--') + ' dB';
+				el2 = document.getElementById('aq_target_bw'); if (el2) el2.textContent = fmtBw(sData.target_bw);
+				el2 = document.getElementById('aq_handover'); if (el2) el2.textContent = sData.handover_count || '0';
+				el2 = document.getElementById('aq_kf_q'); if (el2) el2.textContent = sProf.kf_q || '--';
+				el2 = document.getElementById('aq_kf_r'); if (el2) el2.textContent = sProf.kf_r || '--';
+				el2 = document.getElementById('aq_pid_kp'); if (el2) el2.textContent = sProf.pid_kp || '--';
+				el2 = document.getElementById('aq_pid_ki'); if (el2) el2.textContent = sProf.pid_ki || '--';
+				el2 = document.getElementById('aq_pid_kd'); if (el2) el2.textContent = sProf.pid_kd || '--';
+				el2 = document.getElementById('aq_min_bw'); if (el2) el2.textContent = fmtBw(sProf.min_bw);
+				el2 = document.getElementById('aq_ack'); if (el2) el2.textContent = sProf.ack_filter || '--';
+			});
+		}, 3);
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, 'AiQoS 智能场景调度'),
 

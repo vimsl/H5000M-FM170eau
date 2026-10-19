@@ -20,6 +20,45 @@ static float comp_min(const float comp[4]) {
     return v;
 }
 
+/* ============================================================
+ * BUGFIX 2026-08-28 15:20 v4.5: 评分算法重构为 Sigmoid 平滑模型
+ * 背景: 旧算法存在"断崖"——omni 分支 imbalance*5 线性惩罚过狠
+ *       (极差 18.4dB 直接扣 92 分→21分), directional 分支无 Rank 参与;
+ *       用户反馈 Rank1+单路差时得分从 76 崩到 28,误导寻星。
+ * 新模型(对准度导向 + Sigmoid 平滑,消除一票否决):
+ *   Score = 50·(1-ΔRSRP/30) + 20·f(Rank) + 20·σ(RSRP_best) + 10·σ(SINR)
+ *   - 平衡度 50 分: 天线极差 30dB 归零, 极差≤6dB 接近满分
+ *   - Rank 阶梯 20 分: Rank4=20 / Rank2=15 / Rank1=8 (绝不 4 折/扣 30)
+ *   - RSRP 20 分: σ 拐点 -88dBm, -80~-95 平滑过渡
+ *   - SINR 10 分: σ 拐点 10dB, 0~20 连续映射
+ *   - 弱信号保护: SINR<5 时平衡度按比例衰减(对准度不可信)
+ * 面板同向天线验证(2026-08-28): 4路极差天然1~3dB,平衡度恒高分,
+ *   评分由 RSRP/SINR 主导——符合"旋转对准后信号变强则得分升"的物理。
+ * ============================================================ */
+static inline float aiqos_sigmoid(float x, float center, float k) {
+    return 1.0f / (1.0f + expf(-k * (x - center)));
+}
+
+static int aiqos_alignment_score(const float comp[4], float sinr, int rank) {
+    float rsrp_best = comp_max(comp);
+    float imbalance = comp_max(comp) - comp_min(comp);
+
+    float s_balance = (1.0f - (imbalance / 30.0f)) * 50.0f;
+    if (s_balance < 0.0f) s_balance = 0.0f;
+
+    float s_rank = (rank >= 4) ? 20.0f : ((rank >= 2) ? 15.0f : 8.0f);
+
+    float s_sig  = aiqos_sigmoid(rsrp_best, -88.0f, 0.15f) * 20.0f;
+    float s_sinr = aiqos_sigmoid(sinr, 10.0f, 0.25f) * 10.0f;
+
+    if (sinr < 5.0f) s_balance *= (sinr / 5.0f);
+
+    float total = s_balance + s_rank + s_sig + s_sinr;
+    if (total > 100.0f) total = 100.0f;
+    if (total < 10.0f)  total = 10.0f;
+    return (int)(total + 0.5f);
+}
+
 SpatialGuidanceResult calculate_3d_alignment(const AntennaRawTelemetry *tele,
                                               bool is_directional) {
     SpatialGuidanceResult res = {0};
@@ -51,15 +90,16 @@ SpatialGuidanceResult calculate_3d_alignment(const AntennaRawTelemetry *tele,
         res.azimuth_offset_deg = -h_delta * 2.5f;
         res.elevation_offset_deg = v_delta * 3.0f;
 
-        float base = (comp[0] + 120.0f) * 1.5f + (tele->sinr / 30.0f) * 40.0f;
-        res.score = (int)CLAMP(base - tele->pci_switch_rate * 5.0f, 0.0f, 100.0f);
+        /* v4.5: 统一 Sigmoid 平滑评分(directional/omni 共用),消除断崖 */
+        res.score = aiqos_alignment_score(comp, tele->sinr, res.rank);
 
         snprintf(res.advice, sizeof(res.advice),
                  "Directional: azimuth %.1f deg, elevation %.1f deg (cable +%.1fdB)",
                  res.azimuth_offset_deg, res.elevation_offset_deg, cable_loss);
     } else {
         float imbalance = comp_max(comp) - comp_min(comp);
-        res.score = (int)CLAMP(100.0f - imbalance * 5.0f + (tele->sinr / 30.0f) * 30.0f, 0.0f, 100.0f);
+        /* v4.5: 统一 Sigmoid 平滑评分,替代旧 imbalance*5 线性惩罚 */
+        res.score = aiqos_alignment_score(comp, tele->sinr, res.rank);
         snprintf(res.advice, sizeof(res.advice),
                  "Omni: antenna imbalance %.1fdB, avoid metal obstructions", imbalance);
     }

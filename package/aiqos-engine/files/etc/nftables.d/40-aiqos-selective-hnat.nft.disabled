@@ -1,0 +1,34 @@
+# AiQoS Selective HNAT — mark 修正版 (2026-08-28)
+# 原版用 notrack 失效且有害:
+#   1. priority -150 晚于 conntrack hook(-200),notrack 从未生效(224 条 53 端口 conntrack 实证)
+#   2. 若把优先级改到 -200 前让 notrack"生效",包无 conntrack → masquerade 失效 → LAN 设备断网
+# 修正: 老鼠流打 mark 0x1(保留 conntrack,NAT 正常),flowtable 只卸载 mark 0x0 的大象流。
+#   新连接首包打 mark → forward 链 flow add 不匹配 → 整条连接不进卸载表 → 走 CPU + CAKE 控抖
+#   未打 mark 的 established TCP/UDP 大流量 → flow add @f_offload → 软卸载
+
+# 老鼠流分类(prerouting 打 mark,保留 conntrack)
+chain aiqos_bypass {
+    type filter hook prerouting priority -150; policy accept;
+
+    # DNS / NTP(低带宽高敏感)
+    udp dport { 53, 123 } meta mark set 0x1 accept
+    udp sport { 53, 123 } meta mark set 0x1 accept
+
+    # 竞技游戏 UDP 端口(收敛白名单,减少误判)
+    udp dport { 3074, 3478, 27015-27050 } ct state new meta mark set 0x1 accept
+    udp sport { 3074, 3478, 27015-27050 } ct state new meta mark set 0x1 accept
+
+    # ICMP / ICMPv6 始终走 CPU
+    ip protocol icmp meta mark set 0x1 accept
+    ip6 nexthdr icmpv6 meta mark set 0x1 accept
+
+    # 小包(<256B)仅新连接标记,避免已建立大流被误判
+    ct state new meta length < 256 meta mark set 0x1 accept
+}
+
+# 大象流软卸载(未打 mark 的 established TCP/UDP → flowtable)
+# priority -1 早于 fw4 forward(0),确保在 accept 判定前完成 offload
+chain aiqos_forward_offload {
+    type filter hook forward priority -1; policy accept;
+    meta mark 0x0 ct state established,related meta l4proto { tcp, udp } flow add @f_offload
+}

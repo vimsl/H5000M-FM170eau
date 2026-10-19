@@ -1,133 +1,241 @@
 /*
- * qmi_fix_skb.c — Kprobe hotfix for qmi_wwan_f skb headroom deficiency
+ * qmi_fix_skb.c - Kprobe hotfix for qmi_wwan_f skb tailroom bug
  *
  * Problem:
- *   qmi_wwan_f (Quectel closed-source QMAP driver) allocates sk_buff without
- *   reserving sufficient tailroom. When HNAT/PPE hardware acceleration tries
- *   to append headers, the skb_tailroom check fails and packets are dropped.
- *   Root cause: __netdev_alloc_skb() normally provides LL_RESERVED_SPACE
- *   (includes LL_MAX_HEADER=176), but qmi_wwan_f uses __alloc_skb directly
- *   or __netdev_alloc_skb with insufficient length.
+ *   qmi_wwan_f (Fibocom QMAP driver) allocates skb without sufficient
+ *   tailroom for HNAT hardware acceleration markers. This causes:
+ *   - "skb_tailroom small!" warnings (50+ per boot)
+ *   - Packet drops and reduced throughput
+ *   - Severe impact on IPv6 NAT scenarios
  *
- * Fix:
- *   Intercept __alloc_skb via kprobe. When the caller is qmi_wwan_f,
- *   add LL_MAX_HEADER bytes to the size parameter.
- *   Also try to intercept __netdev_alloc_skb as a bonus path (optional —
- *   it is static inline in kernel 6.6 and may not exist as a symbol).
+ * Fix strategy:
+ *   1. (Legacy) Intercept generic __netdev_alloc_skb/__alloc_skb to add
+ *      headroom for ALL allocations - broad but wasteful.
+ *   2. (Enhanced) Intercept qmi_wwan_f's rx_fixup/tx_fixup/start_xmit
+ *      to check and expand tailroom on demand - targeted and efficient.
  *
- * Design decisions:
- *   - Single mandatory kprobe on __alloc_skb (EXPORT_SYMBOL, always present).
- *   - __netdev_alloc_skb is optional; if the symbol doesn't exist, skip it.
- *   - Caller detection via ARM64 LR (x30) + lazy module text range caching.
- *   - count parameter exposed via sysfs for monitoring.
+ * The enhanced kprobes cover the three code paths where qmi_wwan_f
+ * processes skb before passing to the network stack:
+ *   - qmi_wwan_f_rx_fixup(): USB receive path
+ *   - qmi_wwan_f_tx_fixup(): USB transmit path
+ *   - __qmi_wwan_f_start_xmit(): netdev transmit entry
  *
+ * Upstream reference:
+ *   commit 2e4233870557 ("qmi_wwan: Increase headroom for QMAP SKBs")
  * Usage on router:
  *   insmod qmi_fix_skb.ko
  *   cat /sys/module/qmi_fix_skb/parameters/count
+ *   cat /sys/module/qmi_fix_skb/parameters/tailroom_fixes
  *   dmesg | grep qmi_fix_skb
- *
- * AUTOLOAD:
- *   echo qmi_fix_skb >> /etc/modules.d/qmi-fix
- *   # or install as OpenWrt package with /etc/modules.d/ entry
  */
 
-#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
 #include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Marvis");
-MODULE_DESCRIPTION("Kprobe hotfix for qmi_wwan_f skb headroom (v3)");
+MODULE_DESCRIPTION("Kprobe hotfix for qmi_wwan_f skb tailroom deficiency");
 
-#define LL_MAX_HEADER   176
-#define TARGET_NAME     "qmi_wwan_f"
+#define LL_MAX_HEADER       176
+#define QMI_MIN_TAILROOM    64  /* HNAT marker needs ~48 bytes, 64 for safety */
 
+/* Statistics */
 static int fix_count;
+static int tailroom_fix_count;
 module_param_named(count, fix_count, int, 0444);
-MODULE_PARM_DESC(count, "Total __alloc_skb fix applications");
+MODULE_PARM_DESC(count, "Total headroom fix applications (legacy)");
+module_param_named(tailroom_fixes, tailroom_fix_count, int, 0444);
+MODULE_PARM_DESC(tailroom_fixes, "Total tailroom expansions (enhanced)");
 
-/* Simple caller check via __module_text_address.
- * Not caching text range avoids struct module layout differences across kernel builds.
+
+/* ============================================================
+ * Part 1: Legacy generic skb allocation interception
+ * Covers headroom deficiency for all network drivers.
+ * Kept for backward compatibility.
+ * ============================================================
  */
-static inline bool caller_is_qmi(struct pt_regs *regs)
-{
-	unsigned long caller = regs->regs[30]; /* ARM64 link register */
-	struct module *mod = __module_text_address(caller);
-	return mod && !strcmp(mod->name, TARGET_NAME);
-}
 
-/*
- * __alloc_skb(size, gfp, flags, node)
- * ARM64:  x0=size, x1=gfp, x2=flags, x3=node
- */
-static int fix_alloc_skb_pre(struct kprobe *kp, struct pt_regs *regs)
-{
-	if (!caller_is_qmi(regs))
-		return 0;
-
-	regs->regs[0] += LL_MAX_HEADER;  /* x0 = size */
-	fix_count++;
-	return 0;
-}
-
+/* kprobe pre_handler: __netdev_alloc_skb
+ * __netdev_alloc_skb(dev, length, gfp)
 static struct kprobe kp_alloc_skb = {
 	.symbol_name = "__alloc_skb",
 	.pre_handler = fix_alloc_skb_pre,
 };
 
-/*
- * __netdev_alloc_skb(dev, length, gfp)
- * ARM64:  x0=dev, x1=length, x2=gfp
- * Optional: this symbol may not exist (static inline in kernel 6.6).
- * If it does exist, intercepting it adds headroom earlier in the call chain.
+
+/* ============================================================
+ * Part 2: Enhanced qmi_wwan_f specific interception
+ * Checks tailroom at driver entry points and expands if needed.
+ * This is the targeted fix for the "skb_tailroom small!" issue.
+ * ============================================================
  */
-static int fix_netdev_alloc_pre(struct kprobe *kp, struct pt_regs *regs)
+
+/*
+ * check_and_fix_tailroom() - Expand skb tailroom if insufficient
+ * @skb: socket buffer to check
+ * @min_tailroom: minimum bytes needed after tail pointer
+ *
+ * Called from kprobe pre_handler, must use GFP_ATOMIC.
+ * Returns 0 on success (or no fix needed), -ENOMEM on failure.
+ */
+static inline int check_and_fix_tailroom(struct sk_buff *skb, int min_tailroom)
 {
-	if (!caller_is_qmi(regs))
+	int current_tailroom;
+
+	if (!skb)
 		return 0;
 
-	regs->regs[1] += LL_MAX_HEADER;  /* x1 = length */
-	pr_debug("qmi_fix_skb: __netdev_alloc_skb fix #%d\n", fix_count + 1);
+	current_tailroom = skb_end_pointer(skb) - skb_tail_pointer(skb);
+
+	if (current_tailroom < min_tailroom) {
+		int expand_by = min_tailroom - current_tailroom + 32; /* +32 margin */
+
+		if (pskb_expand_head(skb, 0, expand_by, GFP_ATOMIC)) {
+			pr_warn_ratelimited("qmi_fix_skb: tailroom expand failed\n");
+			return -ENOMEM;
+		}
+		tailroom_fix_count++;
+	}
+
 	return 0;
 }
 
-static struct kprobe kp_netdev_alloc = {
-	.symbol_name = "__netdev_alloc_skb",
-	.pre_handler = fix_netdev_alloc_pre,
+/*
+ * kprobe pre_handler: qmi_wwan_f_rx_fixup
+ *
+ * USB receive path. The driver reads QMAP headers and prepares skb
+ * for the network stack. HNAT may need to append acceleration markers.
+ *
+ * Function signature (from qmi_wwan_f.c):
+ *   int qmi_wwan_f_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
+ * ARM64 ABI: x0=dev, x1=skb
+ */
+static int fix_rx_fixup_pre(struct kprobe *kp, struct pt_regs *regs)
+{
+	struct sk_buff *skb = (struct sk_buff *)regs->regs[1];
+
+	check_and_fix_tailroom(skb, QMI_MIN_TAILROOM);
+	return 0;
+}
+
+/*
+ * kprobe pre_handler: qmi_wwan_f_tx_fixup
+ *
+ * USB transmit path. The driver prepends QMAP headers before sending.
+ * The skb will be passed to USB core, but HNAT checks happen here.
+ *
+ * Function signature (from qmi_wwan_f.c):
+ *   struct sk_buff *qmi_wwan_f_tx_fixup(struct usbnet *dev,
+ *                                        struct sk_buff *skb, gfp_t flags)
+ * ARM64 ABI: x0=dev, x1=skb, x2=flags
+ */
+static int fix_tx_fixup_pre(struct kprobe *kp, struct pt_regs *regs)
+{
+	struct sk_buff *skb = (struct sk_buff *)regs->regs[1];
+
+	check_and_fix_tailroom(skb, QMI_MIN_TAILROOM);
+	return 0;
+}
+
+/*
+ * kprobe pre_handler: __qmi_wwan_f_start_xmit
+ *
+ * Netdev ndo_start_xmit entry point. This is where the kernel hands
+ * an skb to the driver for transmission. HNAT hooks run before this,
+ * so we ensure tailroom is sufficient.
+ *
+ * Function signature:
+ *   netdev_tx_t __qmi_wwan_f_start_xmit(struct sk_buff *skb,
+ *                                         struct net_device *netdev)
+ * ARM64 ABI: x0=skb, x1=netdev
+ */
+static int fix_start_xmit_pre(struct kprobe *kp, struct pt_regs *regs)
+{
+	struct sk_buff *skb = (struct sk_buff *)regs->regs[0];
+
+	check_and_fix_tailroom(skb, QMI_MIN_TAILROOM);
+	return 0;
+}
+
+/* kprobe structures for qmi_wwan_f functions */
+static struct kprobe kp_rx_fixup = {
+	.symbol_name = "qmi_wwan_f_rx_fixup",
+	.pre_handler = fix_rx_fixup_pre,
 };
 
-/* ---- Module init/exit ---- */
+static struct kprobe kp_tx_fixup = {
+	.symbol_name = "qmi_wwan_f_tx_fixup",
+	.pre_handler = fix_tx_fixup_pre,
+};
+
+static struct kprobe kp_start_xmit = {
+	.symbol_name = "__qmi_wwan_f_start_xmit",
+	.pre_handler = fix_start_xmit_pre,
+};
+
+
+/* ============================================================
+ * Module init/exit
+ * ============================================================
+ */
+
+/* Register a kprobe, skip silently if symbol not found (driver not loaded) */
+static int register_kprobe_optional(struct kprobe *kp, const char *name)
+{
+	int ret = register_kprobe(kp);
+
+	if (ret == -ENOENT) {
+		pr_info("qmi_fix_skb: symbol '%s' not found, skipped\n", name);
+		return 0;  /* Not an error, driver may not be loaded */
+	}
+	if (ret) {
+		pr_err("qmi_fix_skb: register_kprobe(%s) = %d\n", name, ret);
+		return ret;
+	}
+	pr_info("qmi_fix_skb: kprobe registered on '%s'\n", name);
+	return 0;
+}
 
 static int __init qmi_fix_init(void)
 {
-	int ret;
 
-	/* Mandatory: __alloc_skb */
-	ret = register_kprobe(&kp_alloc_skb);
+	ret = register_kprobe(&kp_netdev_alloc);
 	if (ret) {
-		pr_err("qmi_fix_skb: register_kprobe(__alloc_skb) = %d\n", ret);
+		pr_err("qmi_fix_skb: register_kprobe(__netdev_alloc_skb) = %d\n", ret);
 		return ret;
 	}
 
-	/* Optional: __netdev_alloc_skb (may be inlined away) */
-	ret = register_kprobe(&kp_netdev_alloc);
-	if (ret)
-		pr_warn("qmi_fix_skb: register_kprobe(__netdev_alloc_skb) = %d (optional, continuing)\n", ret);
-	else
-		pr_info("qmi_fix_skb: __netdev_alloc_skb kprobe also installed\n");
+	ret = register_kprobe(&kp_alloc_skb);
+	if (ret) {
+		pr_err("qmi_fix_skb: register_kprobe(__alloc_skb) = %d\n", ret);
+		unregister_kprobe(&kp_netdev_alloc);
+		return ret;
+	}
 
-	pr_info("qmi_fix_skb: installed, waiting for qmi_wwan_f calls...\n");
+	/* Part 2: Enhanced qmi_wwan_f specific kprobes (optional) */
+	register_kprobe_optional(&kp_rx_fixup, "qmi_wwan_f_rx_fixup");
+	register_kprobe_optional(&kp_tx_fixup, "qmi_wwan_f_tx_fixup");
+	register_kprobe_optional(&kp_start_xmit, "__qmi_wwan_f_start_xmit");
+
+	pr_info("qmi_fix_skb: installed (legacy headroom + enhanced tailroom fix)\n");
+	pr_info("qmi_fix_skb: tailroom threshold = %d bytes\n", QMI_MIN_TAILROOM);
 	return 0;
 }
 
 static void __exit qmi_fix_exit(void)
 {
+	/* Unregister in reverse order */
+	unregister_kprobe(&kp_start_xmit);
+	unregister_kprobe(&kp_tx_fixup);
+	unregister_kprobe(&kp_rx_fixup);
 	unregister_kprobe(&kp_alloc_skb);
-	if (kp_netdev_alloc.addr)
-		unregister_kprobe(&kp_netdev_alloc);
-	pr_info("qmi_fix_skb: removed, total fixes=%d\n", fix_count);
+	unregister_kprobe(&kp_netdev_alloc);
+
+	pr_info("qmi_fix_skb: removed, headroom_fixes=%d, tailroom_fixes=%d\n",
+		fix_count, tailroom_fix_count);
 }
 
 module_init(qmi_fix_init);
-module_exit(qmi_fix_exit);

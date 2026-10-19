@@ -112,6 +112,7 @@ typedef struct {
     float    Kp, Ki, Kd;       /* PID gains */
     uint32_t min_bw_kbit;      /* minimum guaranteed bandwidth */
     uint32_t max_bw_kbit;      /* maximum bandwidth cap */
+    uint32_t cake_rtt_ms;      /* CAKE base RTT target (ms) */
     float    cqi_drop_alpha;   /* CQI derivative lookahead coefficient */
     float    soft_cap_init;    /* soft_cap initial value */
     float    soft_cap_decay;   /* soft_cap exponential decay factor */

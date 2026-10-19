@@ -1,0 +1,112 @@
+#!/bin/sh
+# /www/cgi-bin/hw-api - Hardware control API
+# v70 H4：CORS 收敛 —— 原 `Access-Control-Allow-Origin: *` 允许任意网页跨站调用
+#   本接口（CSRF 面）。去掉通配头，浏览器同源策略自然生效；OPTIONS 预检同理不再放行。
+echo "Content-Type: application/json"
+echo ""
+
+action="${QUERY_STRING%%&*}"
+action="${action#action=}"
+value=$(echo "$QUERY_STRING" | grep -o 'value=[^&]*' | cut -d= -f2)
+
+# v70 H4（2026-09-19 大审计）：写类操作（风扇/屏幕控制）加最简鉴权 ——
+#   原实现任何人可调 + CORS 全开 ⇒ 任意网页可 CSRF 静默操控风扇/杀 python3。
+#   判据与 get_5g_info 一致（LuCI sysauth_http cookie 存在性）。
+#   fan_status 为只读轮询，保持无鉴权（面板/屏保读取）。
+#   同时收紧 CORS：从 * 改为同源（去掉 ACAO 头，浏览器默认同源即可）。
+case "$action" in
+  fan_status|disp_status) ;;
+  *)
+    SYS_COOKIE=$(echo "$HTTP_COOKIE" | tr ';' '\n' | grep '^sysauth_http=' | head -1 | cut -d= -f2-)
+    [ -z "$SYS_COOKIE" ] && { printf '{"error":"unauthorized"}'; exit 0; }
+    ;;
+esac
+
+case "$action" in
+  fan_status)
+    temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)
+    temp=$(awk "BEGIN{printf \"%.1f\",$temp/1000}")
+    fanpwm=$(cat /usr/bin/fanspeed.conf 2>/dev/null | tr -d '\n')
+    fanvall=$(cat /etc/fanvall 2>/dev/null | tr -d '\n')
+    case "$fanvall" in
+      0) mode="低速";;
+      1) mode="中速";;
+      2) mode="高速";;
+      3) mode="全速";;
+      9) mode="智能";;
+      999) mode="无极";;
+      *) mode="未知";;
+    esac
+    pct=0
+    [ -n "$fanpwm" ] && [ "$fanpwm" -gt 0 ] 2>/dev/null && pct=$((fanpwm * 100 / 255))
+    printf '{"temp":"%s","pwm":"%s","mode":"%s","pct":"%s"}' "$temp" "${fanpwm:-0}" "$mode" "$pct"
+    ;;
+  fan_smart)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 9 > /etc/fanvall
+    /usr/bin/fancts.sh &
+    printf '{"ok":true,"mode":"智能"}'
+    ;;
+  fan_low)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 0 > /etc/fanvall
+    echo 64 > /sys/devices/platform/pwm-fan/hwmon/hwmon2/pwm1 2>/dev/null
+    echo 64 > /sys/kernel/duty_cycle 2>/dev/null
+    echo 64 > /usr/bin/fanspeed.conf
+    printf '{"ok":true,"mode":"低速"}'
+    ;;
+  fan_mid)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 1 > /etc/fanvall
+    echo 128 > /sys/devices/platform/pwm-fan/hwmon/hwmon2/pwm1 2>/dev/null
+    echo 128 > /sys/kernel/duty_cycle 2>/dev/null
+    echo 128 > /usr/bin/fanspeed.conf
+    printf '{"ok":true,"mode":"中速"}'
+    ;;
+  fan_high)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 2 > /etc/fanvall
+    echo 192 > /sys/devices/platform/pwm-fan/hwmon/hwmon2/pwm1 2>/dev/null
+    echo 192 > /sys/kernel/duty_cycle 2>/dev/null
+    echo 192 > /usr/bin/fanspeed.conf
+    printf '{"ok":true,"mode":"高速"}'
+    ;;
+  fan_max)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 3 > /etc/fanvall
+    echo 255 > /sys/devices/platform/pwm-fan/hwmon/hwmon2/pwm1 2>/dev/null
+    echo 255 > /sys/kernel/duty_cycle 2>/dev/null
+    echo 255 > /usr/bin/fanspeed.conf
+    printf '{"ok":true,"mode":"全速"}'
+    ;;
+  fan_pwm)
+    pgrep -f fancts.sh | xargs kill -9 2>/dev/null
+    echo 999 > /etc/fanvall
+    echo "$value" > /sys/devices/platform/pwm-fan/hwmon/hwmon2/pwm1 2>/dev/null
+    echo "$value" > /sys/kernel/duty_cycle 2>/dev/null
+    echo "$value" > /usr/bin/fanspeed.conf
+    printf '{"ok":true,"mode":"无极","pwm":"%s"}' "$value"
+    ;;
+  disp_status)
+    /usr/sbin/display-control status
+    ;;
+  disp_screen)
+    /usr/sbin/display-control screen "$value" >/dev/null 2>&1
+    printf '{"ok":true,"screen":"%s"}' "$value"
+    ;;
+  disp_brightness)
+    /usr/sbin/display-control brightness-percent "$value" >/dev/null 2>&1
+    printf '{"ok":true,"brightness":"%s"}' "$value"
+    ;;
+  disp_off)
+    /usr/sbin/display-control off >/dev/null 2>&1
+    printf '{"ok":true}'
+    ;;
+  disp_on)
+    /usr/sbin/display-control on >/dev/null 2>&1
+    printf '{"ok":true}'
+    ;;
+  *)
+    printf '{"error":"unknown action: %s"}' "$action"
+    ;;
+esac

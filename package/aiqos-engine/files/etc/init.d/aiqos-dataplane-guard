@@ -1,0 +1,81 @@
+#!/bin/sh /etc/rc.common
+
+# v58 safety guard: CAKE is the only supported WAN data plane.
+START=98
+STOP=20
+# v63.5 fix (2026-09-11 上机全量检查发现): 本脚本**不得声明 USE_PROCD**（整行删除，不是置 0）。
+# 根因: rc.common 先 source 本脚本(L119)，再在 `[ -n "$USE_PROCD" ]`(L121) 分支重定义
+#   start(){ rc_procd start_service; }(L137)，把本脚本自定义的 start() 覆盖掉 → start_service 未定义
+#   → 守卫全程空转（v58 起从未执行过；实测 0 条 dataplane 日志）。
+#   ⚠️ 注意 `-n` 判的是"非空字符串"：写 USE_PROCD=0 仍非空 → 分支照样进（本人首次修复即踩此坑，验证才暴露）。
+#   boot() 未被重定义，但它调用的 start 已被替换 → 同样空转。
+# 修法: 彻底删掉 USE_PROCD 行 → 跳过该分支，自定义 start()/stop()/boot() 全部生效
+#   （与同目录 aiqos-route-fix 的可用模式一致，它就是没有 USE_PROCD）。
+
+HNAT_HOOK=/sys/kernel/debug/hnat/hook_toggle
+
+boot() {
+    # turboacc starts at 90; wait briefly so this guard wins startup order.
+    sleep 3
+    start
+}
+
+start() {
+    # v64.5 重构 (9/11, R1-⑪): 降级为「审计模式」——常态只读零写。
+    # 背景: 原实现每次启动无条件 set+commit 4 项 uci（与 turboacc 的 fastpath 写权重叠, 是 34.5j
+    #   事故的土壤——写入动作本身会触发 uci commit → 服务 reload 连锁）。现 fastpath 写权归单一化:
+    #   常态下无人写（turboacc 侧已由 fail-safe 反转保证"配置残缺→关"）; 本 guard 仅做校验与异常纠正。
+    local mode fp fo hookv
+    mode="$(uci -q get aiqos.@main[0].offload_mode 2>/dev/null || echo cake_only)"
+    fp="$(uci -q get turboacc.config.fastpath 2>/dev/null || echo none)"
+    fo="$(uci -q get firewall.@defaults[0].flow_offloading 2>/dev/null || echo 0)"
+    hookv="$(cat "$HNAT_HOOK" 2>/dev/null || echo 0)"
+
+    # v63.5 fix (2026-09-11 上机实测): hook_toggle 实际取值是 'disabled'（不是 '0'），
+    #   原判断 [ "$hookv" != "0" ] 恒真 → 常态被误判为异常 → 每次运行都走"纠偏写入"分支，
+    #   恰好制造了 R1-⑪ 要消除的"双写"（写 uci + commit + 可能写 debugfs + 删 flowtable）。
+    #   改为显式识别"开启态"：仅 1/enable/enabled 视为异常。
+    case "$hookv" in
+        1|enable|enabled) _hookbad=1 ;;
+        *)                _hookbad=0 ;;
+    esac
+
+    if [ "$mode" != "cake_only" ] || [ "$fp" != "none" ] || [ "$fo" != "0" ] || [ "$_hookbad" = "1" ]; then
+        # 异常态: 纠偏 + 告警（安全网保留）
+        logger -t aiqos-dataplane "AUDIT FAIL: mode=$mode fastpath=$fp flow_offload=$fo hook=$hookv -> correcting"
+        uci -q set aiqos.@main[0].offload_mode='cake_only'
+        uci -q set firewall.@defaults[0].flow_offloading='0'
+        uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+        uci -q set turboacc.config.fastpath='none'
+        uci -q set turboacc.config.fastpath_mh_eth_hnat='0'
+        uci -q set turboacc.config.fastpath_mh_eth_hnat_v6='0'
+        uci -q commit aiqos
+        uci -q commit firewall
+        uci -q commit turboacc
+        [ -w "$HNAT_HOOK" ] && echo 0 > "$HNAT_HOOK" 2>/dev/null
+        nft delete flowtable inet fw4 f_offload 2>/dev/null
+    else
+        # 常态: 只读校验通过, 零写入（消除与 turboacc 的双写）
+        logger -t aiqos-dataplane "AUDIT OK: cake_only + PPE off (read-only, no writes)"
+    fi
+
+    # v64.5 重构 (9/11, H1 顺带): CAKE 启动自检——aiqosd(START=95) 重启窗口内 ifb0/wwan0 的 CAKE
+    # 可能短暂缺失（实测：引擎重启后重设前为空窗）。此处开机一次校验并触发引擎重设; 用标志文件防循环。
+    if [ ! -f /tmp/.cake_selfcheck_done ]; then
+        for _dev in ifb0 wwan0; do
+            if ! tc qdisc show dev "$_dev" 2>/dev/null | grep -q cake; then
+                logger -t aiqos-dataplane "WARN: $_dev CAKE missing after boot -> aiqosd restart"
+                /etc/init.d/aiqosd restart >/dev/null 2>&1
+                break
+            fi
+        done
+        touch /tmp/.cake_selfcheck_done
+    fi
+
+    logger -t aiqos-dataplane "mode=cake_only PPE=off fw-offload=off CAKE=primary"
+}
+
+stop() {
+    [ -w "$HNAT_HOOK" ] && echo 0 > "$HNAT_HOOK" 2>/dev/null
+    logger -t aiqos-dataplane "stopped; PPE remains disabled"
+}

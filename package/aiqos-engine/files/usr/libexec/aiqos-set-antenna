@@ -1,0 +1,48 @@
+#!/bin/sh
+# AiQoS 天线模式「单一写者」helper
+# v63.5.1 H5 治理 (2026-09-11)：消除 /tmp/aiqos_antenna_mode 的双写者漂移。
+#
+# 背景（治理前）：
+#   · rpcd/aiqos  set_antenna_mode : 写 aiqos_antenna_mode，但【不写】aiqos_antenna_forced，
+#                                    也不做 legacy aiqos.global 清理
+#   · LuCI controller (5g_dashboard.lua): 写 mode + forced，做 legacy 清理
+#   → 同一操作走 ubus 与走 LuCI 结果不一致（forced 残留 / 配置双份），即"双份漂移"土壤。
+#
+# 治理后：写入逻辑只此一份，两处入口都调用本脚本（不在两处各写一遍）。
+#
+# 用法: /usr/libexec/aiqos-set-antenna <auto|omni|directional> [0|1]
+#   第 2 参数 = force（1=强制该模式；0/缺省=取消强制）
+# 返回: 0 成功 / 1 参数非法
+set -u
+
+mode="${1:-}"
+force="${2:-0}"
+
+case "$mode" in
+	auto|omni|directional) ;;
+	*)
+		# 与面板/前端 AIQOS_ANTENNA_MODES 白名单一致，防注入与非法值
+		echo "aiqos-set-antenna: invalid antenna mode '$mode'" >&2
+		exit 1
+		;;
+esac
+[ "$force" = "1" ] || force="0"
+
+# 1) 持久化到 UCI（@main[0] 优先；顺带清理 legacy aiqos.global.antenna_*，避免配置双份）
+uci set "aiqos.@main[0].antenna_mode=$mode" || exit 1
+if [ "$force" = "1" ]; then
+	uci set aiqos.@main[0].antenna_forced='1'
+else
+	uci -q delete aiqos.@main[0].antenna_forced 2>/dev/null
+fi
+uci commit aiqos || exit 1
+uci -q delete aiqos.global.antenna_mode 2>/dev/null
+uci -q delete aiqos.global.antenna_forced 2>/dev/null
+uci -q commit aiqos 2>/dev/null
+true
+
+# 2) 运行态落盘——引擎 aiqosd.c 唯一的读取源是 /tmp/aiqos_antenna_mode（tmpfs）
+printf '%s' "$mode"  > /tmp/aiqos_antenna_mode
+printf '%s' "$force" > /tmp/aiqos_antenna_forced
+
+exit 0

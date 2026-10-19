@@ -1,6 +1,16 @@
 #!/bin/sh /etc/rc.common
 # AiQoS Go Collector - device readiness detection
-START=99
+#
+# v64.5 (2026-09-12, O4 / §1.6 #37) 启动优先级梯队（解耦「S99 拥塞」）：
+#   aiqosd                  ← 95 档  100ms 数据面控制环（必须最先）
+#   aiqos-collector         ← 96 档  本文件：SHM 采集（喂 aiqosd 与面板）
+#   aiqos-dataplane-guard   ← 98 档  数据面只读校验/告警
+#   其余统计/Web 类（netdata / Airpifanctrl / watchdog 等）保持 99 档
+# 目的：杜绝开机瞬间多个服务全顶在 99 争抢调度（设备实测 S99* 达 30 个）。
+# 采用 procd 托管；本优先级只影响**开机启动顺序**，不影响运行期。
+# ⚠️ 本注释刻意**不写**起始档位赋值的字面量 —— 否则会污染任何按 grep 解析该字段的工具/检查。
+#    （判据：`grep -c '^START=' 本文件` 必须 == 1）
+START=96
 STOP=10
 USE_PROCD=1
 

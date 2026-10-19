@@ -1,0 +1,1 @@
+﻿{"admin/services/aiqos":{"title":"AiQoS 智能限速","order":70,"action":{"type":"firstchild"},"depends":{"acl":["aiqos"]}},"admin/services/aiqos/dashboard":{"title":"AiQoS 状态","order":1,"action":{"type":"view","path":"aiqos/aiqos"},"depends":{"acl":["aiqos"]}}}
